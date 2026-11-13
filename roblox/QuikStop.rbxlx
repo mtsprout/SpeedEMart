@@ -140,9 +140,9 @@ do
 end
 
 -- counter + register
-P("Counter", Vector3.new(28, 4, 3), Vector3.new(0, FY + 2, 2), Color3.fromRGB(190, 120, 70), Enum.Material.WoodPlanks)
-local register = P("Register", Vector3.new(3, 1.4, 2), Vector3.new(0, FY + 4.7, 2), Color3.fromRGB(60, 70, 85))
-tag3d(register, "REGISTER", 2.2)
+P("Counter", Vector3.new(14, 3.4, 2.2), Vector3.new(0, FY + 1.7, 2), Color3.fromRGB(190, 120, 70), Enum.Material.WoodPlanks)
+local register = P("Register", Vector3.new(2.2, 1.1, 1.5), Vector3.new(0, FY + 3.95, 2), Color3.fromRGB(60, 70, 85))
+tag3d(register, "REGISTER", 1.8)
 local regPrompt = prompt(register, "Serve", "Customer", 0.3, 13)
 regPrompt.Enabled = false
 
@@ -185,33 +185,79 @@ local function setCarry(plr: Player, name: string?)
 	end
 end
 
--- customer-side shelves: customers walk here and pick up their own items
-local SHOP: { [string]: Vector3 } = {} -- where a customer stands to shop for each item
-local function addShelf(name: string, x: number, z: number, standX: number)
-	P("Shelf_" .. name, Vector3.new(3, 8, 6), Vector3.new(x, FY + 4, z), Color3.fromRGB(120, 85, 60))
-	local face = x > 0 and -1.9 or 1.9
-	for i = 0, 2 do
-		for j = 0, 1 do
-			P("Stock_" .. name, Vector3.new(1.2, 1.6, 1.6), Vector3.new(x + face, FY + 2 + i * 2.4, z - 1.4 + j * 2.8), ITEMS[name].color)
+-- free-standing shelves out on the shop floor; customers shop from both sides
+local SHOP: { [string]: { stand: Vector3, look: Vector3, via: Vector3? } } = {}
+local function addGondola(x: number, z0: number, z1: number, westName: string, eastName: string)
+	local zc = (z0 + z1) / 2
+	local len = z1 - z0
+	P("Gondola", Vector3.new(3, 6, len), Vector3.new(x, FY + 3, zc), Color3.fromRGB(150, 150, 165))
+	P("GondolaTop", Vector3.new(3.4, 0.4, len + 0.4), Vector3.new(x, FY + 6.2, zc), Color3.fromRGB(70, 70, 85))
+	for side = 1, 2 do
+		local name = side == 1 and westName or eastName
+		local fx = x + (side == 1 and -1.9 or 1.9)
+		for row = 0, 2 do
+			for k = 0, math.floor(len / 2) - 1 do
+				P("Stock_" .. name, Vector3.new(1.2, 1.4, 1.5), Vector3.new(fx, FY + 1.1 + row * 1.9, z0 + 1.2 + k * 2), ITEMS[name].color)
+			end
+		end
+		local sg = P("ShelfSign_" .. name, Vector3.new(0.4, 0.4, 0.4), Vector3.new(fx, FY + 7.6, zc), Color3.new(1, 1, 1))
+		sg.Transparency = 1
+		tag3d(sg, name, 0)
+		local sx = x + (side == 1 and -4.5 or 4.5)
+		SHOP[name] = { stand = Vector3.new(sx, 3, zc), look = Vector3.new(x, 3, zc), via = Vector3.new(sx, 3, 8) }
+	end
+end
+addGondola(-22, 14, 24, "Cookies", "Chips")
+addGondola(20, 14, 24, "Candy", "Gum")
+
+-- energy drink cooler island
+do
+	local zc = 12
+	P("CoolerIsland", Vector3.new(3, 8, 8), Vector3.new(-9, FY + 4, zc), Color3.fromRGB(60, 120, 205), Enum.Material.Glass)
+	P("CoolerTop", Vector3.new(3.4, 0.4, 8.4), Vector3.new(-9, FY + 8.2, zc), Color3.fromRGB(30, 60, 120))
+	for row = 0, 3 do
+		for k = 0, 3 do
+			P("Stock_Energy", Vector3.new(1, 1.6, 1.4), Vector3.new(-7.4, FY + 1.2 + row * 1.9, zc - 3 + k * 2), ITEMS["Energy Drink"].color, Enum.Material.Neon)
 		end
 	end
-	local sign3 = P("ShelfSign_" .. name, Vector3.new(0.4, 0.4, 0.4), Vector3.new(x + face, FY + 8.6, z), Color3.fromRGB(255, 255, 255))
-	sign3.Transparency = 1
-	tag3d(sign3, name, 0)
-	SHOP[name] = Vector3.new(standX, 3, z)
+	local sg = P("CoolerSign", Vector3.new(0.4, 0.4, 0.4), Vector3.new(-7.4, FY + 9.6, zc), Color3.new(1, 1, 1))
+	sg.Transparency = 1
+	tag3d(sg, "Energy Drinks", 0, Color3.fromRGB(120, 220, 255))
+	SHOP["Energy Drink"] = { stand = Vector3.new(-5, 3, zc), look = Vector3.new(-9, 3, zc), via = nil }
 end
-addShelf("Chips", 28, 10, 23)
-addShelf("Candy", 28, 15, 23)
-addShelf("Gum", 28, 20, 23)
-addShelf("Cookies", -28, 20, -23)
-addShelf("Energy Drink", -28, 12, -23)
 
--- top shelf (batteries) + step stool
-P("TopShelf", Vector3.new(18, 1, 2), Vector3.new(13, FY + 11, -24), Color3.fromRGB(70, 60, 90))
-for i = 0, 8 do
-	P("Battery", Vector3.new(1.4, 2.4, 1.2), Vector3.new(5 + i * 2, FY + 12.6, -24), i % 2 == 0 and Color3.fromRGB(240, 200, 40) or Color3.fromRGB(220, 60, 50))
+-- top shelf (batteries): a proper wall rack up high, with a real step stool
+do
+	local DARK = Color3.fromRGB(55, 55, 70)
+	P("RackBoard", Vector3.new(22, 6.4, 0.5), Vector3.new(13, FY + 10.4, -24.7), Color3.fromRGB(40, 42, 54))
+	for _, dx in ipairs({ -11, 0, 11 }) do
+		P("RackPost", Vector3.new(0.6, 6.4, 1.6), Vector3.new(13 + dx, FY + 10.4, -23.9), DARK, Enum.Material.Metal)
+	end
+	for _, y in ipairs({ 8.2, 10.9 }) do
+		P("RackShelf", Vector3.new(22, 0.35, 2), Vector3.new(13, FY + y, -23.7), Color3.fromRGB(200, 200, 215), Enum.Material.Metal)
+	end
+	local PACKS = {
+		Color3.fromRGB(240, 200, 40),
+		Color3.fromRGB(220, 60, 50),
+		Color3.fromRGB(50, 120, 230),
+		Color3.fromRGB(60, 180, 90),
+	}
+	for row, y in ipairs({ 8.2, 10.9 }) do
+		for i = 0, 11 do
+			local col = PACKS[(i + row) % #PACKS + 1]
+			local x = 3.2 + i * 1.7
+			P("BatteryPack", Vector3.new(1.3, 2.3, 0.5), Vector3.new(x, FY + y + 1.25, -23.9), col)
+			P("BatteryCell", Vector3.new(0.5, 1.1, 0.5), Vector3.new(x, FY + y + 1.0, -23.55), Color3.fromRGB(215, 215, 225), Enum.Material.Metal)
+		end
+	end
 end
-local stool = P("StepStool", Vector3.new(3, 2.4, 3), Vector3.new(13, FY + 1.2, -19), Color3.fromRGB(240, 240, 240))
+local stool = P("StepStool", Vector3.new(3, 0.4, 3), Vector3.new(13, FY + 2, -19), Color3.fromRGB(235, 235, 240))
+for _, ox in ipairs({ -1.2, 1.2 }) do
+	for _, oz in ipairs({ -1.2, 1.2 }) do
+		P("StoolLeg", Vector3.new(0.4, 2, 0.4), Vector3.new(13 + ox, FY + 1, -19 + oz), Color3.fromRGB(150, 150, 165), Enum.Material.Metal)
+	end
+end
+P("StoolStep", Vector3.new(2.6, 0.3, 2.6), Vector3.new(13, FY + 1, -19), Color3.fromRGB(215, 215, 225))
 local stoolPrompt = prompt(stool, "Climb for batteries", "Step stool", 4.5, 8)
 stoolPrompt.Enabled = false
 
@@ -705,35 +751,56 @@ local function step(dt: number)
 		spawnSpill()
 	end
 
-	-- shoppers walk to their shelf, pick up their item, then join the line
-	for _, c in ipairs(table.clone(S.shoppers)) do
-		local stand = SHOP[c.want]
-		local flat = (c.hrp.Position - stand) * Vector3.new(1, 0, 1)
+	-- shoppers: through the door, around the shelves, pick up their item, then join the line
+	local function walkTo(c: any, v: Vector3): boolean
+		local flat = (c.hrp.Position - v) * Vector3.new(1, 0, 1)
 		if flat.Magnitude > 2.5 then
-			c.hum:MoveTo(Vector3.new(stand.X, c.hrp.Position.Y, stand.Z))
+			c.hum:MoveTo(Vector3.new(v.X, c.hrp.Position.Y, v.Z))
+			return false
+		end
+		return true
+	end
+	for _, c in ipairs(table.clone(S.shoppers)) do
+		local info = SHOP[c.want]
+		c.ph = c.ph or 0
+		if c.ph == 0 then
+			if walkTo(c, Vector3.new(0, 0, 19)) then
+				c.ph = info.via and 1 or 2
+			end
+		elseif c.ph == 1 then
+			if walkTo(c, info.via :: Vector3) then
+				c.ph = 2
+			end
+		elseif c.ph == 2 then
+			if walkTo(c, info.stand) then
+				c.shopT += dt
+				if c.shopT > 0.3 and not c.faced then
+					c.faced = true
+					c.hrp.CFrame = CFrame.lookAt(c.hrp.Position, Vector3.new(info.look.X, c.hrp.Position.Y, info.look.Z))
+				end
+				if c.shopT >= 1.8 then
+					local it = new("Part", {
+						Name = "HeldItem",
+						Size = Vector3.new(1.2, 1.4, 1.2),
+						Color = ITEMS[c.want].color,
+						CanCollide = false,
+						Massless = true,
+						CFrame = c.hrp.CFrame * CFrame.new(0, 0.3, -1.8),
+					}, c.model)
+					new("WeldConstraint", { Part0 = c.hrp, Part1 = it }, it)
+					c.faced = false
+					c.ph = info.via and 3 or 4
+				end
+			end
+		elseif c.ph == 3 then
+			if walkTo(c, info.via :: Vector3) then
+				c.ph = 4
+			end
 		else
-			c.shopT += dt
-			if c.shopT > 0.3 and not c.faced then
-				c.faced = true
-				local shelfX = stand.X > 0 and 30 or -30
-				c.hrp.CFrame = CFrame.lookAt(c.hrp.Position, Vector3.new(shelfX, c.hrp.Position.Y, c.hrp.Position.Z))
-			end
-			if c.shopT >= 1.8 then
-				local it = new("Part", {
-					Name = "HeldItem",
-					Size = Vector3.new(1.2, 1.4, 1.2),
-					Color = ITEMS[c.want].color,
-					CanCollide = false,
-					Massless = true,
-					CFrame = c.hrp.CFrame * CFrame.new(0, 0.3, -1.8),
-				}, c.model)
-				new("WeldConstraint", { Part0 = c.hrp, Part1 = it }, it)
-				c.shopping = false
-				c.faced = false
-				c.label.Text = c.text
-				table.remove(S.shoppers, table.find(S.shoppers, c))
-				table.insert(S.queue, c)
-			end
+			c.shopping = false
+			c.label.Text = c.text
+			table.remove(S.shoppers, table.find(S.shoppers, c))
+			table.insert(S.queue, c)
 		end
 	end
 
