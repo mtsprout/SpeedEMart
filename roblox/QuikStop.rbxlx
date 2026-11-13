@@ -1,0 +1,1193 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Meta name="ExplicitAutoJoints">true</Meta><Item class="Workspace" referent="RBX1"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="Lighting" referent="RBX2"><Properties><string name="Name">Lighting</string></Properties></Item><Item class="ReplicatedStorage" referent="RBX3"><Properties><string name="Name">ReplicatedStorage</string></Properties></Item><Item class="ServerScriptService" referent="RBX5"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX4"><Properties><string name="Name">QuikStopServer</string><ProtectedString name="Source"><![CDATA[-- QUIK-STOP: Night Shift  (Roblox port, first pass)
+-- Server script: builds the store, runs customers, rage, cash, shifts.
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local Debris = game:GetService("Debris")
+
+------------------------------------------------------------ remotes
+local function newRemote(name: string): RemoteEvent
+	local r = Instance.new("RemoteEvent")
+	r.Name = name
+	r.Parent = RS
+	return r
+end
+local ToastEvt = newRemote("Toast")
+local SnapEvt = newRemote("Snap")
+local EndEvt = newRemote("EndShift")
+local ChangeEvt = newRemote("Change")
+local SubmitEvt = newRemote("SubmitChange")
+local DropEvt = newRemote("DropItem")
+local ReassureEvt = newRemote("Reassure")
+
+------------------------------------------------------------ helpers
+local function new(class: string, props: { [string]: any }, parent: Instance?): any
+	local o = Instance.new(class)
+	for k, v in pairs(props) do
+		(o :: any)[k] = v
+	end
+	o.Parent = parent
+	return o
+end
+
+local function toast(plr: Player?, text: string, color: Color3?)
+	local col = color or Color3.fromRGB(255, 255, 255)
+	if plr then
+		ToastEvt:FireClient(plr, text, col)
+	else
+		ToastEvt:FireAllClients(text, col)
+	end
+end
+
+local YELLOW = Color3.fromRGB(255, 220, 90)
+local RED = Color3.fromRGB(255, 110, 100)
+local GREEN = Color3.fromRGB(130, 240, 150)
+
+------------------------------------------------------------ the store
+local FY = 0.4 -- floor top height
+local store = new("Folder", { Name = "Store" }, workspace)
+local spillFolder = new("Folder", { Name = "Spills" }, store)
+
+local function P(name: string, size: Vector3, pos: Vector3, color: Color3, mat: Enum.Material?, parent: Instance?): Part
+	return new("Part", {
+		Name = name,
+		Anchored = true,
+		Size = size,
+		Position = pos,
+		Color = color,
+		Material = mat or Enum.Material.SmoothPlastic,
+		TopSurface = Enum.SurfaceType.Smooth,
+		BottomSurface = Enum.SurfaceType.Smooth,
+	}, parent or store)
+end
+
+local function prompt(parent: Instance, action: string, object: string, hold: number, dist: number): ProximityPrompt
+	return new("ProximityPrompt", {
+		ActionText = action,
+		ObjectText = object,
+		HoldDuration = hold,
+		MaxActivationDistance = dist,
+		RequiresLineOfSight = false,
+	}, parent)
+end
+
+local function tag3d(part: Part, text: string, offsetY: number, color: Color3?)
+	local bb = new("BillboardGui", {
+		Size = UDim2.fromOffset(160, 30),
+		StudsOffset = Vector3.new(0, offsetY, 0),
+		MaxDistance = 45,
+		AlwaysOnTop = false,
+	}, part)
+	new("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = color or Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0.3,
+		Font = Enum.Font.FredokaOne,
+		TextScaled = true,
+	}, bb)
+end
+
+-- ground, floor, walls
+P("Ground", Vector3.new(300, 1, 300), Vector3.new(0, -0.5, 0), Color3.fromRGB(70, 74, 82), Enum.Material.Asphalt)
+P("Floor", Vector3.new(60, 0.4, 50), Vector3.new(0, FY / 2, 0), Color3.fromRGB(236, 232, 214), Enum.Material.Marble)
+local WALL = Color3.fromRGB(255, 205, 90)
+local WH = 14
+P("WallBack", Vector3.new(61, WH, 1), Vector3.new(0, FY + WH / 2, -25), WALL)
+P("WallLeft", Vector3.new(1, WH, 51), Vector3.new(-30, FY + WH / 2, 0), WALL)
+P("WallRight", Vector3.new(1, WH, 51), Vector3.new(30, FY + WH / 2, 0), WALL)
+P("WallFrontL", Vector3.new(24, WH, 1), Vector3.new(-18, FY + WH / 2, 25), WALL)
+P("WallFrontR", Vector3.new(24, WH, 1), Vector3.new(18, FY + WH / 2, 25), WALL)
+P("Lintel", Vector3.new(12, 4, 1), Vector3.new(0, FY + WH - 2, 25), WALL)
+local ceil = P("Ceiling", Vector3.new(60, 0.5, 50), Vector3.new(0, FY + WH + 0.25, 0), Color3.fromRGB(240, 240, 240))
+ceil.Transparency = 0.7
+ceil.CanCollide = false
+
+local sign = P("Sign", Vector3.new(24, 3.4, 1), Vector3.new(0, FY + WH + 1.7, 25), Color3.fromRGB(200, 30, 40), Enum.Material.Neon)
+do
+	local sg = new("SurfaceGui", { Face = Enum.NormalId.Back, SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud }, sign)
+	new("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "QUIK-STOP",
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.FredokaOne,
+		TextScaled = true,
+	}, sg)
+end
+
+for _, x in ipairs({ -18, 0, 18 }) do
+	for _, z in ipairs({ -16, 0, 16 }) do
+		local lamp = P("Lamp", Vector3.new(5, 0.3, 5), Vector3.new(x, FY + WH - 0.2, z), Color3.fromRGB(255, 250, 225), Enum.Material.Neon)
+		new("PointLight", { Range = 30, Brightness = 1.3, Color = Color3.fromRGB(255, 244, 220) }, lamp)
+	end
+end
+
+-- spawn pad (staff side)
+do
+	local sp = new("SpawnLocation", {
+		Name = "StaffSpawn",
+		Anchored = true,
+		Size = Vector3.new(6, 0.2, 6),
+		Position = Vector3.new(0, FY + 0.1, -8),
+		Transparency = 1,
+		CanCollide = false,
+		Neutral = true,
+		Duration = 0,
+	}, store)
+	sp.TopSurface = Enum.SurfaceType.Smooth
+end
+
+-- counter + register
+P("Counter", Vector3.new(28, 4, 3), Vector3.new(0, FY + 2, 2), Color3.fromRGB(190, 120, 70), Enum.Material.WoodPlanks)
+local register = P("Register", Vector3.new(3, 1.4, 2), Vector3.new(0, FY + 4.7, 2), Color3.fromRGB(60, 70, 85))
+tag3d(register, "REGISTER", 2.2)
+local regPrompt = prompt(register, "Serve", "Customer", 0.3, 13)
+regPrompt.Enabled = false
+
+-- items
+local ITEMS: { [string]: { color: Color3 } } = {
+	Chips = { color = Color3.fromRGB(255, 140, 40) },
+	Candy = { color = Color3.fromRGB(255, 100, 190) },
+	Gum = { color = Color3.fromRGB(90, 220, 120) },
+	Cookies = { color = Color3.fromRGB(150, 100, 60) },
+	["Energy Drink"] = { color = Color3.fromRGB(0, 180, 255) },
+	Batteries = { color = Color3.fromRGB(240, 200, 40) },
+}
+local SNACKS = { "Chips", "Candy", "Gum", "Cookies" }
+
+local function setCarry(plr: Player, name: string?)
+	plr:SetAttribute("Carry", name or "")
+	if not name then
+		plr:SetAttribute("Early", false)
+	end
+	local ch = plr.Character
+	if not ch then
+		return
+	end
+	local old = ch:FindFirstChild("CarryItem")
+	if old then
+		old:Destroy()
+	end
+	local hrp = ch:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if name and hrp and ITEMS[name] then
+		local p = new("Part", {
+			Name = "CarryItem",
+			Size = Vector3.new(1.4, 1.4, 1.4),
+			Color = ITEMS[name].color,
+			CanCollide = false,
+			Massless = true,
+			Material = Enum.Material.SmoothPlastic,
+			CFrame = hrp.CFrame * CFrame.new(0, 0.4, -2.2),
+		}, ch)
+		new("WeldConstraint", { Part0 = hrp, Part1 = p }, p)
+	end
+end
+
+local function addShelfItem(name: string, x: number, z: number, y: number, face: number)
+	P("Shelf_" .. name, Vector3.new(6, 8, 2), Vector3.new(x, FY + 4, z), Color3.fromRGB(120, 85, 60))
+	local it = P("Item_" .. name, Vector3.new(2.6, 2.6, 2.6), Vector3.new(x, FY + y, z + face), ITEMS[name].color)
+	tag3d(it, name, 2.4)
+	local pp = prompt(it, "Take", name, 0, 8)
+	pp.Triggered:Connect(function(plr)
+		local cur = plr:GetAttribute("Carry")
+		if cur == "" or cur == nil then
+			setCarry(plr, name)
+		else
+			toast(plr, "Hands full! Press Q to put it down.", RED)
+		end
+	end)
+end
+addShelfItem("Chips", -22, -24, 4.5, 2.2)
+addShelfItem("Candy", -15, -24, 4.5, 2.2)
+addShelfItem("Gum", -8, -24, 4.5, 2.2)
+addShelfItem("Cookies", -1, -24, 4.5, 2.2)
+
+-- energy drink cooler (left wall)
+P("Cooler", Vector3.new(3, 9, 12), Vector3.new(-28, FY + 4.5, -12), Color3.fromRGB(50, 110, 200), Enum.Material.Glass)
+do
+	local it = P("Item_Energy", Vector3.new(2.2, 2.6, 2.6), Vector3.new(-25.8, FY + 4, -12), ITEMS["Energy Drink"].color, Enum.Material.Neon)
+	tag3d(it, "Energy Drinks", 2.4)
+	local pp = prompt(it, "Take", "Energy Drink", 0, 8)
+	pp.Triggered:Connect(function(plr)
+		local cur = plr:GetAttribute("Carry")
+		if cur == "" or cur == nil then
+			setCarry(plr, "Energy Drink")
+		else
+			toast(plr, "Hands full! Press Q to put it down.", RED)
+		end
+	end)
+end
+
+-- top shelf (batteries) + step stool
+P("TopShelf", Vector3.new(18, 1, 2), Vector3.new(13, FY + 11, -24), Color3.fromRGB(70, 60, 90))
+for i = 0, 8 do
+	P("Battery", Vector3.new(1.4, 2.4, 1.2), Vector3.new(5 + i * 2, FY + 12.6, -24), i % 2 == 0 and Color3.fromRGB(240, 200, 40) or Color3.fromRGB(220, 60, 50))
+end
+local stool = P("StepStool", Vector3.new(3, 2.4, 3), Vector3.new(13, FY + 1.2, -19), Color3.fromRGB(240, 240, 240))
+local stoolPrompt = prompt(stool, "Climb for batteries", "Step stool", 4.5, 8)
+stoolPrompt.Enabled = false
+
+------------------------------------------------------------ game state
+local PHASES = {
+	{ 0, 10, "Evening traffic" },
+	{ 55, 30, "Quiet hours" },
+	{ 150, 26, "Late-night lull" },
+	{ 210, 18, "Energy drink rush" },
+	{ 250, 28, "Quiet" },
+	{ 300, 20, "Lottery fever" },
+	{ 345, 30, "Dead of night" },
+	{ 390, 12, "Morning commute" },
+	{ 450, 9, "Final stretch" },
+}
+local SHIFT_LEN = 480
+
+local S: any = {}
+local oldStateModels: { Instance } = {}
+
+local function phaseAt(t: number)
+	local p = PHASES[1]
+	for _, x in ipairs(PHASES) do
+		if t >= x[1] then
+			p = x
+		end
+	end
+	return p
+end
+
+local function nm(): number
+	return 1 + 0.10 * (S.night - 1)
+end
+
+local function addRage(x: number)
+	S.rage = math.clamp(S.rage + x * (1 + 0.08 * (S.night - 1)), 0, 100)
+end
+
+local function resetState(night: number)
+	for _, m in ipairs(oldStateModels) do
+		if m.Parent then
+			m:Destroy()
+		end
+	end
+	table.clear(oldStateModels)
+	spillFolder:ClearAllChildren()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		setCarry(plr, nil)
+	end
+	S = {
+		night = night,
+		t = 0,
+		rage = 0,
+		health = 100,
+		tips = 0,
+		served = 0,
+		walkouts = 0,
+		snapT = 0,
+		spawnT = 3,
+		count = 0,
+		queue = {},
+		running = true,
+		freeze = 0,
+		burst = 0,
+		burstT = 0,
+		warned = false,
+		burstStarted = false,
+		spillT = 40,
+		reassureReady = 0,
+		phase = "Evening traffic",
+		endAt = 0,
+	}
+end
+resetState(1)
+S.running = false
+
+------------------------------------------------------------ customers
+local SKIN = { Color3.fromRGB(255, 204, 153), Color3.fromRGB(234, 184, 146), Color3.fromRGB(190, 130, 90), Color3.fromRGB(120, 80, 55) }
+local SHIRTS = {
+	Color3.fromRGB(231, 76, 60),
+	Color3.fromRGB(52, 152, 219),
+	Color3.fromRGB(46, 204, 113),
+	Color3.fromRGB(155, 89, 182),
+	Color3.fromRGB(241, 196, 15),
+	Color3.fromRGB(230, 126, 34),
+}
+
+local function makeNPC(shirt: Color3): Model?
+	local d = Instance.new("HumanoidDescription")
+	local skin = SKIN[math.random(#SKIN)]
+	d.HeadColor = skin
+	d.TorsoColor = shirt
+	d.LeftArmColor = skin
+	d.RightArmColor = skin
+	d.LeftLegColor = Color3.fromRGB(60, 70, 110)
+	d.RightLegColor = Color3.fromRGB(60, 70, 110)
+	local ok, m = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(d, Enum.HumanoidRigType.R6)
+	end)
+	if ok then
+		return m :: Model
+	end
+	warn("QuikStop: could not build NPC:", m)
+	return nil
+end
+
+local function pickKind(): string
+	S.count += 1
+	if S.count <= 5 then
+		return "normal"
+	end
+	local r = math.random()
+	if r < 0.22 then
+		return "energy"
+	elseif r < 0.40 then
+		return "battery"
+	elseif r < 0.58 then
+		return "big"
+	end
+	return "normal"
+end
+
+local function frontCustomer(): any
+	return S.queue[1]
+end
+
+local function leave(c: any, happy: boolean)
+	local i = table.find(S.queue, c)
+	if i then
+		table.remove(S.queue, i)
+	end
+	c.stage = "leaving"
+	c.panelOpen = false
+	c.label.Text = happy and "Thanks!" or "Ugh, forget it!"
+	c.label.TextColor3 = happy and GREEN or RED
+	c.bar.Visible = false
+	c.hum.WalkSpeed = 15
+	c.hum:MoveTo(Vector3.new(0, 3, 42))
+	Debris:AddItem(c.model, 9)
+end
+
+local function spawnCustomer(forceKind: string?)
+	local mine = S
+	local kind = forceKind or pickKind()
+	local m = makeNPC(SHIRTS[math.random(#SHIRTS)])
+	if not m then
+		return
+	end
+	if S ~= mine or not S.running then
+		m:Destroy()
+		return
+	end
+	local hum = m:FindFirstChildOfClass("Humanoid") :: Humanoid
+	local hrp = m:FindFirstChild("HumanoidRootPart") :: BasePart
+	local head = m:FindFirstChild("Head") :: BasePart
+	m.Name = "Customer"
+	hum.WalkSpeed = 11
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+
+	local want = SNACKS[math.random(#SNACKS)]
+	local price = math.random(2, 9)
+	local paid = price <= 5 and 5 or (price <= 10 and 10 or 20)
+	local maxP = 55
+	local stage = "item"
+	local text = want
+	if kind == "energy" then
+		want = "Energy Drink"
+		price = math.random(3, 6)
+		paid = 10
+		maxP = 50
+		stage = "id"
+		text = "Energy Drink (ID check!)"
+		local cap = new("Part", { Size = Vector3.new(2.2, 0.5, 2.4), Color = Color3.fromRGB(30, 90, 230), CanCollide = false, Massless = true, CFrame = head.CFrame * CFrame.new(0, 0.7, 0) }, m)
+		new("WeldConstraint", { Part0 = head, Part1 = cap }, cap)
+	elseif kind == "battery" then
+		want = "Batteries"
+		price = math.random(8, 12)
+		paid = 20
+		maxP = 60
+		text = "Batteries (top shelf!)"
+		local cap = new("Part", { Size = Vector3.new(2.2, 0.5, 2.4), Color = Color3.fromRGB(220, 50, 50), CanCollide = false, Massless = true, CFrame = head.CFrame * CFrame.new(0, 0.7, 0) }, m)
+		new("WeldConstraint", { Part0 = head, Part1 = cap }, cap)
+	elseif kind == "big" then
+		price = math.random(1, 4)
+		paid = math.random() < 0.5 and 50 or 100
+		maxP = 50
+		text = want .. "  (paying $" .. paid .. ")"
+	end
+	maxP = maxP / nm()
+
+	local bb = new("BillboardGui", { Size = UDim2.fromOffset(210, 56), StudsOffset = Vector3.new(0, 3.4, 0), AlwaysOnTop = true, MaxDistance = 90, Adornee = head }, head)
+	local label = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 34),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 30),
+		BackgroundTransparency = 0.25,
+		Text = text,
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.FredokaOne,
+		TextScaled = true,
+	}, bb)
+	new("UICorner", { CornerRadius = UDim.new(0, 8) }, label)
+	local barBg = new("Frame", { Position = UDim2.new(0, 0, 0, 38), Size = UDim2.new(1, 0, 0, 10), BackgroundColor3 = Color3.fromRGB(20, 20, 30) }, bb)
+	local bar = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = GREEN }, barBg)
+	new("UICorner", { CornerRadius = UDim.new(0, 5) }, barBg)
+	new("UICorner", { CornerRadius = UDim.new(0, 5) }, bar)
+
+	m.Parent = workspace
+	m:PivotTo(CFrame.new(0, 3.5, 34))
+	pcall(function()
+		hrp:SetNetworkOwner(nil)
+	end)
+
+	local c = {
+		kind = kind,
+		want = want,
+		price = price,
+		paid = paid,
+		patience = maxP,
+		maxP = maxP,
+		stage = stage,
+		model = m,
+		hum = hum,
+		hrp = hrp,
+		label = label,
+		bar = bar,
+		bb = bb,
+		arrived = false,
+		faced = false,
+		bigRaged = false,
+		panelOpen = false,
+		panelT = 0,
+	}
+	table.insert(S.queue, c)
+	table.insert(oldStateModels, m)
+end
+
+------------------------------------------------------------ spills
+local function spawnSpill()
+	local x = math.random(-22, 22)
+	local z = math.random() < 0.5 and math.random(-20, -4) or math.random(8, 20)
+	local sp = new("Part", {
+		Name = "Spill",
+		Anchored = true,
+		CanCollide = false,
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(0.2, 6, 6),
+		CFrame = CFrame.new(x, FY + 0.15, z) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = Color3.fromRGB(90, 170, 240),
+		Transparency = 0.15,
+		Material = Enum.Material.Glass,
+	}, spillFolder)
+	tag3d(sp, "SPILL!", 2, Color3.fromRGB(120, 200, 255))
+	local pp = prompt(sp, "Mop", "Spill", 2, 8)
+	pp.Triggered:Connect(function(plr)
+		if sp.Parent then
+			sp:Destroy()
+			S.health = math.min(100, S.health + 6)
+			S.rage = math.max(0, S.rage - 6)
+			toast(plr, "Mopped! +6 health", GREEN)
+		end
+	end)
+	toast(nil, "Somebody spilled something. Mop it!", YELLOW)
+end
+
+------------------------------------------------------------ counter prompt logic
+regPrompt.Triggered:Connect(function(plr)
+	if not S.running then
+		return
+	end
+	local c = frontCustomer()
+	if not c or not c.arrived then
+		return
+	end
+	if c.stage == "id" then
+		c.stage = "item"
+		c.label.Text = c.want .. "  (ID ok)"
+		toast(plr, "ID checked. Now grab the drink.", GREEN)
+	elseif c.stage == "item" then
+		local carry = plr:GetAttribute("Carry")
+		if carry == c.want then
+			local early = plr:GetAttribute("Early") == true
+			setCarry(plr, nil)
+			c.stage = "pay"
+			if c.kind == "battery" and early then
+				S.tips += 5
+				S.health = math.min(100, S.health + 3)
+				S.rage = math.max(0, S.rage - 8)
+				c.patience = math.min(c.maxP, c.patience + c.maxP * 0.25)
+				toast(plr, "PROACTIVE! +$5", GREEN)
+			end
+			if c.kind == "big" then
+				addRage(14)
+			end
+			c.panelOpen = true
+			c.panelT = 0
+			ChangeEvt:FireClient(plr, "open", c.price, c.paid)
+		elseif carry == "" or carry == nil then
+			toast(plr, "Fetch the " .. c.want .. " first!", YELLOW)
+		else
+			toast(plr, "That's not what they asked for!", RED)
+			setCarry(plr, nil)
+			addRage(9)
+			c.patience -= c.maxP * 0.15
+		end
+	elseif c.stage == "pay" then
+		c.panelOpen = true
+		c.panelT = 0
+		ChangeEvt:FireClient(plr, "open", c.price, c.paid)
+	end
+end)
+
+SubmitEvt.OnServerEvent:Connect(function(plr, amount, cancel)
+	local c = frontCustomer()
+	if not S.running or not c or c.stage ~= "pay" then
+		return
+	end
+	if cancel == true then
+		c.panelOpen = false
+		return
+	end
+	if typeof(amount) ~= "number" then
+		return
+	end
+	if amount == c.paid - c.price then
+		local frac = math.clamp(c.patience / c.maxP, 0, 1)
+		local tip = 1 + math.floor(frac * 3)
+		S.tips += tip
+		S.served += 1
+		S.rage = math.max(0, S.rage - 7)
+		ChangeEvt:FireClient(plr, "close")
+		toast(plr, "+$" .. tip .. " tip", GREEN)
+		leave(c, true)
+	else
+		c.patience -= c.maxP * 0.15
+		addRage(4)
+		toast(plr, "Wrong change! They're annoyed.", RED)
+	end
+end)
+
+stoolPrompt.Triggered:Connect(function(plr)
+	if not S.running then
+		return
+	end
+	local wants = false
+	for _, c in ipairs(S.queue) do
+		if c.want == "Batteries" and c.stage ~= "leaving" then
+			wants = true
+		end
+	end
+	if not wants then
+		return
+	end
+	if plr:GetAttribute("Carry") ~= "" then
+		toast(plr, "Hands full! Press Q to put it down.", RED)
+		return
+	end
+	local c0 = frontCustomer()
+	local early = not (c0 and c0.arrived and c0.want == "Batteries")
+	setCarry(plr, "Batteries")
+	plr:SetAttribute("Early", early)
+end)
+
+DropEvt.OnServerEvent:Connect(function(plr)
+	setCarry(plr, nil)
+end)
+
+ReassureEvt.OnServerEvent:Connect(function(plr)
+	if not S.running then
+		return
+	end
+	local now = os.clock()
+	if now < S.reassureReady then
+		toast(plr, "You just said that. Wait " .. math.ceil(S.reassureReady - now) .. "s.", YELLOW)
+		return
+	end
+	S.reassureReady = now + math.min(30, 15 + 2 * (S.night - 1))
+	S.freeze = math.max(2, 4 - 0.5 * (S.night - 1))
+	local c = frontCustomer()
+	if c then
+		c.patience = math.min(c.maxP, c.patience + c.maxP * math.max(0.04, 0.12 - 0.02 * (S.night - 1)))
+	end
+	toast(plr, "\"Be right with you!\"", GREEN)
+end)
+
+------------------------------------------------------------ meltdown
+local WORDS = { "WHACK!", "BONK!", "THWACK!", "SMACK!", "KA-POW!" }
+local function meltdown()
+	S.snapT = 0
+	S.rage = 0
+	S.health = math.max(0, S.health - 12)
+	local victim = S.queue[1] or S.queue[#S.queue]
+	SnapEvt:FireAllClients("SNAP!!!  " .. WORDS[math.random(#WORDS)])
+	for _, c in ipairs(S.queue) do
+		c.patience -= c.maxP * 0.45
+	end
+	if victim then
+		local i = table.find(S.queue, victim)
+		if i then
+			table.remove(S.queue, i)
+		end
+		if victim.panelOpen then
+			ChangeEvt:FireAllClients("close")
+		end
+		victim.stage = "leaving"
+		victim.panelOpen = false
+		victim.bb.Enabled = false
+		victim.hum.PlatformStand = true
+		victim.hrp.AssemblyLinearVelocity = Vector3.new(math.random(-15, 15), 55, 60)
+		Debris:AddItem(victim.model, 6)
+		S.walkouts += 1
+		local pct = math.min(0.5, 0.25 + 0.03 * (S.night - 1))
+		local loss = math.min(S.tips, math.max(10, math.floor(S.tips * pct)))
+		S.tips -= loss
+		toast(nil, "LAWSUIT! The customer sued. -$" .. loss .. " from your tips.", RED)
+	end
+end
+
+------------------------------------------------------------ main step
+local function endShift(win: boolean)
+	S.running = false
+	S.endAt = os.clock() + 12
+	for _, c in ipairs(S.queue) do
+		leave(c, true)
+	end
+	ChangeEvt:FireAllClients("close")
+	local title = win and "SHIFT COMPLETE! It's 6 AM." or "YOU'RE FIRED!"
+	local sub = string.format("Night %d  |  Tips: $%d  |  Served: %d  |  Walkouts: %d", S.night, S.tips, S.served, S.walkouts)
+	EndEvt:FireAllClients(title, sub, win)
+	S.win = win
+end
+
+local function step(dt: number)
+	local nmv = nm()
+	S.t += dt
+	if S.freeze > 0 then
+		S.freeze -= dt
+	end
+	local ph = phaseAt(S.t)
+	S.phase = ph[3]
+
+	-- spawning
+	if S.t >= 198 and not S.warned then
+		S.warned = true
+		toast(nil, "Heads up: an energy drink rush hits at 1:30 AM!", YELLOW)
+	end
+	if S.t >= 210 and not S.burstStarted then
+		S.burstStarted = true
+		S.burst = 5 + math.floor((S.night - 1) / 2)
+		toast(nil, "ENERGY DRINK RUSH!", RED)
+	end
+	S.spawnT -= dt
+	if S.burst > 0 then
+		S.burstT -= dt
+		if S.burstT <= 0 then
+			S.burst -= 1
+			S.burstT = 2.5
+			task.spawn(spawnCustomer, "energy")
+		end
+	elseif S.spawnT <= 0 then
+		local cap = math.min(5, 3 + math.floor(S.night / 2))
+		if #S.queue < cap then
+			task.spawn(spawnCustomer)
+		end
+		S.spawnT = ph[2] / nmv * (0.8 + 0.4 * math.random())
+	end
+
+	-- spills
+	S.spillT -= dt
+	if S.spillT <= 0 and S.t > 30 then
+		S.spillT = 45 / nmv
+		spawnSpill()
+	end
+
+	-- customers
+	local snapshot = table.clone(S.queue)
+	for _, c in ipairs(snapshot) do
+		local i = table.find(S.queue, c)
+		if i then
+			local spot = Vector3.new(0, c.hrp.Position.Y, 6 + 3 * (i - 1))
+			local flat = (c.hrp.Position - spot) * Vector3.new(1, 0, 1)
+			if flat.Magnitude > 2 then
+				c.hum:MoveTo(spot)
+				c.arrived = false
+				c.faced = false
+			else
+				if not c.arrived then
+					c.arrived = true
+				end
+				if not c.faced then
+					c.faced = true
+					c.hrp.CFrame = CFrame.lookAt(c.hrp.Position, c.hrp.Position - Vector3.new(0, 0, 1))
+				end
+			end
+			if i == 1 and c.arrived and c.kind == "big" and not c.bigRaged then
+				c.bigRaged = true
+				addRage(20)
+				toast(nil, "A $" .. c.paid .. " bill for a $" .. c.price .. " snack. Great.", YELLOW)
+			end
+			if c.panelOpen then
+				c.panelT += dt
+			end
+			if not (c.panelOpen and c.panelT < 20) and S.freeze <= 0 then
+				c.patience -= dt
+			end
+			local frac = math.clamp(c.patience / c.maxP, 0, 1)
+			c.bar.Size = UDim2.fromScale(frac, 1)
+			c.bar.BackgroundColor3 = frac > 0.5 and GREEN or (frac > 0.25 and YELLOW or RED)
+			if c.patience <= 0 then
+				addRage(14)
+				S.walkouts += 1
+				if c.panelOpen then
+					ChangeEvt:FireAllClients("close")
+				end
+				toast(nil, "A customer walked out!", RED)
+				leave(c, false)
+			end
+		end
+	end
+
+	-- rage
+	if #S.queue >= 4 then
+		addRage(2 * dt)
+	end
+	S.rage = math.max(0, S.rage - 0.6 * dt)
+	if S.rage >= 80 then
+		S.snapT += dt
+		if S.snapT >= 7 then
+			meltdown()
+		end
+	else
+		S.snapT = math.max(0, S.snapT - dt * 2)
+	end
+
+	-- health
+	local drain = 0
+	if S.t > 60 or S.night > 1 then
+		drain += #spillFolder:GetChildren() * 0.35
+		if S.rage > 70 then
+			drain += 0.6
+		end
+	end
+	if drain > 0 then
+		S.health -= drain * dt * (1 + 0.08 * (S.night - 1))
+	else
+		S.health = math.min(100, S.health + 0.1 * dt)
+	end
+
+	-- prompts
+	local c = frontCustomer()
+	if c and c.arrived and c.stage ~= "leaving" then
+		regPrompt.Enabled = true
+		if c.stage == "id" then
+			regPrompt.ActionText = "Check ID"
+			regPrompt.HoldDuration = 2
+		elseif c.stage == "item" then
+			regPrompt.ActionText = "Hand over " .. c.want
+			regPrompt.HoldDuration = c.kind == "battery" and 1.6 or 0.5
+		else
+			regPrompt.ActionText = "Make change"
+			regPrompt.HoldDuration = 0.3
+		end
+	else
+		regPrompt.Enabled = false
+	end
+	local wantsBat = false
+	for _, q in ipairs(S.queue) do
+		if q.want == "Batteries" then
+			wantsBat = true
+		end
+	end
+	stoolPrompt.Enabled = wantsBat
+
+	-- publish
+	workspace:SetAttribute("Rage", S.rage)
+	workspace:SetAttribute("Health", S.health)
+	workspace:SetAttribute("Tips", S.tips)
+	workspace:SetAttribute("Clock", S.t)
+	workspace:SetAttribute("Night", S.night)
+	workspace:SetAttribute("Phase", S.phase)
+	workspace:SetAttribute("Queue", #S.queue)
+	workspace:SetAttribute("SnapT", S.snapT)
+	if c and c.arrived then
+		workspace:SetAttribute("FrontWant", c.want)
+		workspace:SetAttribute("FrontStage", c.stage)
+		workspace:SetAttribute("FrontPrice", c.price)
+		workspace:SetAttribute("FrontPaid", c.paid)
+	else
+		workspace:SetAttribute("FrontWant", "")
+		workspace:SetAttribute("FrontStage", c and "walking" or "")
+	end
+	workspace:SetAttribute("Running", true)
+
+	Lighting.ClockTime = (22 + S.t / 60) % 24
+
+	if S.health <= 0 then
+		endShift(false)
+	elseif S.t >= SHIFT_LEN then
+		endShift(true)
+	end
+end
+
+------------------------------------------------------------ players
+local function onPlayer(plr: Player)
+	plr:SetAttribute("Carry", "")
+	plr.CharacterAdded:Connect(function()
+		task.wait(0.2)
+		setCarry(plr, nil)
+	end)
+end
+Players.PlayerAdded:Connect(onPlayer)
+for _, p in ipairs(Players:GetPlayers()) do
+	onPlayer(p)
+end
+
+Lighting.Ambient = Color3.fromRGB(70, 70, 95)
+Lighting.OutdoorAmbient = Color3.fromRGB(55, 55, 90)
+Lighting.Brightness = 1
+
+------------------------------------------------------------ main loop
+task.spawn(function()
+	while #Players:GetPlayers() == 0 do
+		task.wait(0.5)
+	end
+	task.wait(5)
+	resetState(1)
+	toast(nil, "Night 1 begins. Welcome to QUIK-STOP.", YELLOW)
+	local last = os.clock()
+	while true do
+		task.wait(0.1)
+		local now = os.clock()
+		local dt = math.min(now - last, 0.5)
+		last = now
+		if S.running then
+			step(dt)
+		else
+			workspace:SetAttribute("Running", false)
+			if S.endAt > 0 and now >= S.endAt then
+				local nextNight = S.win and S.night + 1 or S.night
+				resetState(nextNight)
+				EndEvt:FireAllClients(nil)
+				toast(nil, "Night " .. nextNight .. " begins.", YELLOW)
+			end
+		end
+	end
+end)
+]]></ProtectedString></Properties></Item></Item><Item class="StarterPlayer" referent="RBX8"><Properties><string name="Name">StarterPlayer</string></Properties><Item class="StarterPlayerScripts" referent="RBX7"><Properties><string name="Name">StarterPlayerScripts</string></Properties><Item class="LocalScript" referent="RBX6"><Properties><string name="Name">QuikStopClient</string><ProtectedString name="Source"><![CDATA[-- QUIK-STOP: Night Shift (Roblox port, first pass)
+-- Client script: HUD, order ticket, change panel, toasts, key bindings.
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local plr = Players.LocalPlayer
+local playerGui = plr:WaitForChild("PlayerGui")
+
+local ToastEvt = RS:WaitForChild("Toast") :: RemoteEvent
+local SnapEvt = RS:WaitForChild("Snap") :: RemoteEvent
+local EndEvt = RS:WaitForChild("EndShift") :: RemoteEvent
+local ChangeEvt = RS:WaitForChild("Change") :: RemoteEvent
+local SubmitEvt = RS:WaitForChild("SubmitChange") :: RemoteEvent
+local DropEvt = RS:WaitForChild("DropItem") :: RemoteEvent
+local ReassureEvt = RS:WaitForChild("Reassure") :: RemoteEvent
+
+local function mk(class: string, props: { [string]: any }, parent: Instance?): any
+	local o = Instance.new(class)
+	for k, v in pairs(props) do
+		(o :: any)[k] = v
+	end
+	o.Parent = parent
+	return o
+end
+
+local FONT = Enum.Font.FredokaOne
+local DARK = Color3.fromRGB(24, 24, 36)
+local WHITE = Color3.new(1, 1, 1)
+local GREEN = Color3.fromRGB(110, 230, 140)
+local YELLOW = Color3.fromRGB(255, 215, 80)
+local RED = Color3.fromRGB(255, 100, 90)
+
+local gui = mk("ScreenGui", { Name = "QuikHUD", ResetOnSpawn = false, IgnoreGuiInset = false }, playerGui)
+
+local function card(pos: UDim2, size: UDim2, anchor: Vector2?): Frame
+	local f = mk("Frame", { Position = pos, Size = size, AnchorPoint = anchor or Vector2.new(0, 0), BackgroundColor3 = DARK, BackgroundTransparency = 0.2 }, gui)
+	mk("UICorner", { CornerRadius = UDim.new(0, 12) }, f)
+	mk("UIStroke", { Color = Color3.fromRGB(10, 10, 16), Thickness = 2 }, f)
+	return f
+end
+
+local function text(parent: Instance, t: string, size: number, color: Color3, pos: UDim2, sz: UDim2, align: Enum.TextXAlignment?): TextLabel
+	return mk("TextLabel", {
+		Text = t,
+		TextSize = size,
+		TextColor3 = color,
+		Font = FONT,
+		BackgroundTransparency = 1,
+		Position = pos,
+		Size = sz,
+		TextXAlignment = align or Enum.TextXAlignment.Left,
+		TextWrapped = true,
+	}, parent)
+end
+
+local function meter(parent: Instance, y: number, name: string, col: Color3): (Frame, TextLabel)
+	text(parent, name, 16, WHITE, UDim2.fromOffset(10, y), UDim2.fromOffset(60, 20))
+	local bg = mk("Frame", { Position = UDim2.fromOffset(70, y + 3), Size = UDim2.fromOffset(150, 14), BackgroundColor3 = Color3.fromRGB(50, 50, 66) }, parent)
+	mk("UICorner", { CornerRadius = UDim.new(0, 7) }, bg)
+	local fill = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = col }, bg)
+	mk("UICorner", { CornerRadius = UDim.new(0, 7) }, fill)
+	local pct = text(parent, "", 14, WHITE, UDim2.fromOffset(226, y), UDim2.fromOffset(44, 20))
+	return fill, pct
+end
+
+-- top-left: health + rage
+local topLeft = card(UDim2.fromOffset(12, 12), UDim2.fromOffset(282, 82))
+local healthFill, healthPct = meter(topLeft, 8, "HEALTH", GREEN)
+local rageFill, ragePct = meter(topLeft, 32, "RAGE", RED)
+local carryLbl = text(topLeft, "Carrying: nothing", 15, YELLOW, UDim2.fromOffset(10, 56), UDim2.fromOffset(262, 20))
+
+-- top-right: tips
+local topRight = card(UDim2.new(1, -12, 0, 12), UDim2.fromOffset(160, 44), Vector2.new(1, 0))
+local tipsLbl = text(topRight, "TIPS $0", 24, GREEN, UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1), Enum.TextXAlignment.Center)
+
+-- bottom-right: clock
+local clockCard = card(UDim2.new(1, -12, 1, -12), UDim2.fromOffset(200, 92), Vector2.new(1, 1))
+local clockLbl = text(clockCard, "10:00 PM", 30, WHITE, UDim2.fromOffset(0, 4), UDim2.new(1, 0, 0, 36), Enum.TextXAlignment.Center)
+local nightLbl = text(clockCard, "NIGHT 1", 16, YELLOW, UDim2.fromOffset(0, 40), UDim2.new(1, 0, 0, 20), Enum.TextXAlignment.Center)
+local phaseLbl = text(clockCard, "", 14, Color3.fromRGB(190, 190, 210), UDim2.fromOffset(0, 62), UDim2.new(1, 0, 0, 20), Enum.TextXAlignment.Center)
+
+-- bottom-left: order ticket
+local ticket = card(UDim2.new(0, 12, 1, -50), UDim2.fromOffset(290, 118), Vector2.new(0, 1))
+text(ticket, "ORDER TICKET", 14, Color3.fromRGB(190, 190, 210), UDim2.fromOffset(10, 4), UDim2.fromOffset(200, 18))
+local wantsLbl = text(ticket, "No customer yet", 22, WHITE, UDim2.fromOffset(10, 22), UDim2.fromOffset(270, 56))
+local stepLbl = text(ticket, "", 16, YELLOW, UDim2.fromOffset(10, 78), UDim2.fromOffset(270, 36))
+
+-- bottom controls strip
+local strip = text(gui, "E: interact (hold)    Q: put down    F: \"Be right with you!\"    H: help", 14, Color3.fromRGB(220, 220, 235), UDim2.new(0, 12, 1, -40), UDim2.new(1, -240, 0, 24))
+strip.AnchorPoint = Vector2.new(0, 0)
+strip.TextStrokeTransparency = 0.5
+
+-- toast
+local toastLbl = mk("TextLabel", {
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 70),
+	Size = UDim2.fromOffset(560, 40),
+	BackgroundColor3 = DARK,
+	BackgroundTransparency = 0.25,
+	TextColor3 = WHITE,
+	Font = FONT,
+	TextSize = 22,
+	TextWrapped = true,
+	Visible = false,
+}, gui)
+mk("UICorner", { CornerRadius = UDim.new(0, 10) }, toastLbl)
+local toastId = 0
+local function showToast(t: string, col: Color3?)
+	toastId += 1
+	local my = toastId
+	toastLbl.Text = t
+	toastLbl.TextColor3 = col or WHITE
+	toastLbl.Visible = true
+	task.delay(3.2, function()
+		if toastId == my then
+			toastLbl.Visible = false
+		end
+	end)
+end
+ToastEvt.OnClientEvent:Connect(showToast)
+
+-- snap overlay
+local snapFrame = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(200, 0, 0), BackgroundTransparency = 1, Visible = false, ZIndex = 20 }, gui)
+local snapLbl = mk("TextLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.45),
+	Size = UDim2.fromScale(0.9, 0.3),
+	BackgroundTransparency = 1,
+	TextColor3 = Color3.fromRGB(255, 240, 80),
+	TextStrokeColor3 = Color3.new(0, 0, 0),
+	TextStrokeTransparency = 0,
+	Font = FONT,
+	TextScaled = true,
+	Text = "SNAP!!!",
+	ZIndex = 21,
+}, snapFrame)
+SnapEvt.OnClientEvent:Connect(function(t: string)
+	snapLbl.Text = t
+	snapFrame.Visible = true
+	snapFrame.BackgroundTransparency = 0.55
+	snapLbl.Rotation = -6
+	TweenService:Create(snapFrame, TweenInfo.new(2.2), { BackgroundTransparency = 1 }):Play()
+	TweenService:Create(snapLbl, TweenInfo.new(0.4, Enum.EasingStyle.Elastic), { Rotation = 4 }):Play()
+	task.delay(2.4, function()
+		snapFrame.Visible = false
+	end)
+end)
+
+-- end-of-shift overlay
+local endFrame = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.35, Visible = false, ZIndex = 30 }, gui)
+local endTitle = text(endFrame, "", 48, YELLOW, UDim2.fromScale(0, 0.3), UDim2.fromScale(1, 0.15), Enum.TextXAlignment.Center)
+local endSub = text(endFrame, "", 26, WHITE, UDim2.fromScale(0, 0.47), UDim2.fromScale(1, 0.1), Enum.TextXAlignment.Center)
+local endHint = text(endFrame, "Next shift starts in a few seconds...", 20, Color3.fromRGB(200, 200, 215), UDim2.fromScale(0, 0.6), UDim2.fromScale(1, 0.06), Enum.TextXAlignment.Center)
+endTitle.ZIndex = 31
+endSub.ZIndex = 31
+endHint.ZIndex = 31
+EndEvt.OnClientEvent:Connect(function(title: string?, sub: string?, win: boolean?)
+	if title == nil then
+		endFrame.Visible = false
+		return
+	end
+	endTitle.Text = title
+	endTitle.TextColor3 = win and GREEN or RED
+	endSub.Text = sub or ""
+	endFrame.Visible = true
+end)
+
+-- help panel
+local help = card(UDim2.fromScale(0.5, 0.5), UDim2.fromOffset(520, 400), Vector2.new(0.5, 0.5))
+help.Visible = false
+help.ZIndex = 25
+local helpText = text(
+	help,
+	"QUIK-STOP: NIGHT SHIFT\n\n"
+		.. "Survive 8 hours (10 PM to 6 AM). Keep your health up and your rage down.\n\n"
+		.. "E (hold)  interact: take items, ring up, mop\nQ  put down what you're carrying\nF  \"Be right with you!\" (slows impatience, has a cooldown)\nH  show / hide this help\n\n"
+		.. "Normal customers: fetch the item, hand it over at the REGISTER, then make exact change.\n"
+		.. "Blue cap: energy drink. Check their ID first (hold E).\n"
+		.. "Red cap: batteries on the TOP shelf. Climb the step stool (hold E).\n"
+		.. "Grab batteries BEFORE they reach the counter for a PROACTIVE bonus.\n"
+		.. "Big bills ($50/$100) for small snacks will make you mad. That's the point.\n"
+		.. "Spills: mop them or your health drains.",
+	17,
+	WHITE,
+	UDim2.fromOffset(16, 12),
+	UDim2.fromOffset(488, 376)
+)
+helpText.ZIndex = 26
+helpText.TextYAlignment = Enum.TextYAlignment.Top
+
+-- change panel
+local panel = card(UDim2.fromScale(0.5, 0.5), UDim2.fromOffset(380, 340), Vector2.new(0.5, 0.5))
+panel.Visible = false
+panel.ZIndex = 15
+local panelInfo = text(panel, "", 22, WHITE, UDim2.fromOffset(14, 10), UDim2.fromOffset(352, 70), Enum.TextXAlignment.Center)
+local panelTotal = text(panel, "Change: $0", 34, GREEN, UDim2.fromOffset(14, 84), UDim2.fromOffset(352, 44), Enum.TextXAlignment.Center)
+local total = 0
+local function setTotal(v: number)
+	total = v
+	panelTotal.Text = "Change: $" .. total
+end
+local function btn(label: string, pos: UDim2, size: UDim2, col: Color3, cb: () -> ())
+	local b = mk("TextButton", { Text = label, Position = pos, Size = size, BackgroundColor3 = col, TextColor3 = DARK, Font = FONT, TextSize = 24 }, panel)
+	mk("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
+	b.MouseButton1Click:Connect(cb)
+end
+local bills = { 1, 5, 10, 20, 50 }
+for i, v in ipairs(bills) do
+	btn("+$" .. v, UDim2.fromOffset(14 + (i - 1) * 72, 140), UDim2.fromOffset(66, 50), Color3.fromRGB(130, 210, 140), function()
+		setTotal(total + v)
+	end)
+end
+btn("Clear", UDim2.fromOffset(14, 206), UDim2.fromOffset(110, 46), Color3.fromRGB(240, 200, 110), function()
+	setTotal(0)
+end)
+btn("GIVE CHANGE", UDim2.fromOffset(134, 206), UDim2.fromOffset(232, 46), Color3.fromRGB(100, 190, 250), function()
+	SubmitEvt:FireServer(total, false)
+	setTotal(0)
+end)
+btn("Step away", UDim2.fromOffset(14, 268), UDim2.fromOffset(352, 44), Color3.fromRGB(200, 200, 215), function()
+	panel.Visible = false
+	setTotal(0)
+	SubmitEvt:FireServer(0, true)
+end)
+
+ChangeEvt.OnClientEvent:Connect(function(what: string, price: number?, paid: number?)
+	if what == "open" and price and paid then
+		panelInfo.Text = "Item costs $" .. price .. "\nThey paid with $" .. paid
+		setTotal(0)
+		panel.Visible = true
+	else
+		panel.Visible = false
+		setTotal(0)
+	end
+end)
+
+-- keys
+UIS.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.Q then
+		DropEvt:FireServer()
+	elseif input.KeyCode == Enum.KeyCode.F then
+		ReassureEvt:FireServer()
+	elseif input.KeyCode == Enum.KeyCode.H then
+		help.Visible = not help.Visible
+	end
+end)
+task.delay(1, function()
+	help.Visible = true
+	task.delay(14, function()
+		help.Visible = false
+	end)
+end)
+
+-- HUD refresh
+local function ga(name: string): any
+	return workspace:GetAttribute(name)
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+		local health = (ga("Health") or 100) :: number
+		local rage = (ga("Rage") or 0) :: number
+		healthFill.Size = UDim2.fromScale(math.clamp(health / 100, 0, 1), 1)
+		healthPct.Text = math.floor(health) .. "%"
+		rageFill.Size = UDim2.fromScale(math.clamp(rage / 100, 0, 1), 1)
+		rageFill.BackgroundColor3 = rage >= 80 and Color3.fromRGB(255, 40, 40) or RED
+		ragePct.Text = math.floor(rage) .. "%"
+		tipsLbl.Text = "TIPS $" .. tostring(ga("Tips") or 0)
+
+		local m = math.floor((ga("Clock") or 0) :: number)
+		local tot = 22 * 60 + m
+		local h = math.floor(tot / 60) % 24
+		local mi = tot % 60
+		local ap = h >= 12 and "PM" or "AM"
+		local h12 = h % 12
+		if h12 == 0 then
+			h12 = 12
+		end
+		clockLbl.Text = string.format("%d:%02d %s", h12, mi, ap)
+		nightLbl.Text = "NIGHT " .. tostring(ga("Night") or 1)
+		phaseLbl.Text = tostring(ga("Phase") or "")
+
+		local carry = plr:GetAttribute("Carry")
+		carryLbl.Text = (carry and carry ~= "") and ("Carrying: " .. tostring(carry)) or "Carrying: nothing"
+
+		local want = tostring(ga("FrontWant") or "")
+		local stage = tostring(ga("FrontStage") or "")
+		if want ~= "" then
+			wantsLbl.Text = "WANTS: " .. want
+			if stage == "id" then
+				stepLbl.Text = "NEXT: check their ID at the register"
+			elseif stage == "item" then
+				if carry == want then
+					stepLbl.Text = "NEXT: hand it over at the register"
+				elseif want == "Batteries" then
+					stepLbl.Text = "NEXT: climb the step stool for batteries"
+				else
+					stepLbl.Text = "NEXT: fetch " .. want
+				end
+			elseif stage == "pay" then
+				stepLbl.Text = "NEXT: make exact change at the register"
+			else
+				stepLbl.Text = ""
+			end
+		elseif stage == "walking" then
+			wantsLbl.Text = "Customer walking up..."
+			stepLbl.Text = ""
+		else
+			wantsLbl.Text = "No customer at the counter"
+			stepLbl.Text = ""
+		end
+	end
+end)
+]]></ProtectedString></Properties></Item></Item></Item></roblox>
