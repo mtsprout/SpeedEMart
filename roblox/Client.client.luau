@@ -176,9 +176,9 @@ local helpText = text(
 	"QUIK-STOP: NIGHT SHIFT\n\n"
 		.. "Survive 8 hours (10 PM to 6 AM). Keep your health up and your rage down.\n\n"
 		.. "E (hold)  interact: take items, ring up, mop\nQ  put down what you're carrying\nF  \"Be right with you!\" (slows impatience, has a cooldown)\nH  show / hide this help\n\n"
-		.. "Normal customers: fetch the item, hand it over at the REGISTER, then make exact change.\n"
+		.. "Customers shop for themselves. When they reach the counter: RING THEM UP at the register (hold E), then make exact change.\n"
 		.. "Blue cap: energy drink. Check their ID first (hold E).\n"
-		.. "Red cap: batteries on the TOP shelf. Climb the step stool (hold E).\n"
+		.. "Red cap: batteries are on the TOP shelf behind you. Climb the step stool (hold E), then hand them over.\n"
 		.. "Grab batteries BEFORE they reach the counter for a PROACTIVE bonus.\n"
 		.. "Big bills ($50/$100) for small snacks will make you mad. That's the point.\n"
 		.. "Spills: mop them or your health drains.",
@@ -295,6 +295,8 @@ task.spawn(function()
 			wantsLbl.Text = "WANTS: " .. want
 			if stage == "id" then
 				stepLbl.Text = "NEXT: check their ID at the register"
+			elseif stage == "ring" then
+				stepLbl.Text = "NEXT: ring it up at the register"
 			elseif stage == "item" then
 				if carry == want then
 					stepLbl.Text = "NEXT: hand it over at the register"

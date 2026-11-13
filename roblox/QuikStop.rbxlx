@@ -129,8 +129,8 @@ do
 	local sp = new("SpawnLocation", {
 		Name = "StaffSpawn",
 		Anchored = true,
-		Size = Vector3.new(6, 0.2, 6),
-		Position = Vector3.new(0, FY + 0.1, -8),
+		Size = Vector3.new(6, 0.2, 4),
+		CFrame = CFrame.new(0, FY + 0.1, -1.2) * CFrame.Angles(0, math.pi, 0),
 		Transparency = 1,
 		CanCollide = false,
 		Neutral = true,
@@ -185,40 +185,26 @@ local function setCarry(plr: Player, name: string?)
 	end
 end
 
-local function addShelfItem(name: string, x: number, z: number, y: number, face: number)
-	P("Shelf_" .. name, Vector3.new(6, 8, 2), Vector3.new(x, FY + 4, z), Color3.fromRGB(120, 85, 60))
-	local it = P("Item_" .. name, Vector3.new(2.6, 2.6, 2.6), Vector3.new(x, FY + y, z + face), ITEMS[name].color)
-	tag3d(it, name, 2.4)
-	local pp = prompt(it, "Take", name, 0, 8)
-	pp.Triggered:Connect(function(plr)
-		local cur = plr:GetAttribute("Carry")
-		if cur == "" or cur == nil then
-			setCarry(plr, name)
-		else
-			toast(plr, "Hands full! Press Q to put it down.", RED)
+-- customer-side shelves: customers walk here and pick up their own items
+local SHOP: { [string]: Vector3 } = {} -- where a customer stands to shop for each item
+local function addShelf(name: string, x: number, z: number, standX: number)
+	P("Shelf_" .. name, Vector3.new(3, 8, 6), Vector3.new(x, FY + 4, z), Color3.fromRGB(120, 85, 60))
+	local face = x > 0 and -1.9 or 1.9
+	for i = 0, 2 do
+		for j = 0, 1 do
+			P("Stock_" .. name, Vector3.new(1.2, 1.6, 1.6), Vector3.new(x + face, FY + 2 + i * 2.4, z - 1.4 + j * 2.8), ITEMS[name].color)
 		end
-	end)
+	end
+	local sign3 = P("ShelfSign_" .. name, Vector3.new(0.4, 0.4, 0.4), Vector3.new(x + face, FY + 8.6, z), Color3.fromRGB(255, 255, 255))
+	sign3.Transparency = 1
+	tag3d(sign3, name, 0)
+	SHOP[name] = Vector3.new(standX, 3, z)
 end
-addShelfItem("Chips", -22, -24, 4.5, 2.2)
-addShelfItem("Candy", -15, -24, 4.5, 2.2)
-addShelfItem("Gum", -8, -24, 4.5, 2.2)
-addShelfItem("Cookies", -1, -24, 4.5, 2.2)
-
--- energy drink cooler (left wall)
-P("Cooler", Vector3.new(3, 9, 12), Vector3.new(-28, FY + 4.5, -12), Color3.fromRGB(50, 110, 200), Enum.Material.Glass)
-do
-	local it = P("Item_Energy", Vector3.new(2.2, 2.6, 2.6), Vector3.new(-25.8, FY + 4, -12), ITEMS["Energy Drink"].color, Enum.Material.Neon)
-	tag3d(it, "Energy Drinks", 2.4)
-	local pp = prompt(it, "Take", "Energy Drink", 0, 8)
-	pp.Triggered:Connect(function(plr)
-		local cur = plr:GetAttribute("Carry")
-		if cur == "" or cur == nil then
-			setCarry(plr, "Energy Drink")
-		else
-			toast(plr, "Hands full! Press Q to put it down.", RED)
-		end
-	end)
-end
+addShelf("Chips", 28, 10, 23)
+addShelf("Candy", 28, 15, 23)
+addShelf("Gum", 28, 20, 23)
+addShelf("Cookies", -28, 20, -23)
+addShelf("Energy Drink", -28, 12, -23)
 
 -- top shelf (batteries) + step stool
 P("TopShelf", Vector3.new(18, 1, 2), Vector3.new(13, FY + 11, -24), Color3.fromRGB(70, 60, 90))
@@ -287,6 +273,7 @@ local function resetState(night: number)
 		spawnT = 3,
 		count = 0,
 		queue = {},
+		shoppers = {},
 		running = true,
 		freeze = 0,
 		burst = 0,
@@ -389,7 +376,7 @@ local function spawnCustomer(forceKind: string?)
 	local price = math.random(2, 9)
 	local paid = price <= 5 and 5 or (price <= 10 and 10 or 20)
 	local maxP = 55
-	local stage = "item"
+	local stage = "ring"
 	local text = want
 	if kind == "energy" then
 		want = "Energy Drink"
@@ -402,6 +389,7 @@ local function spawnCustomer(forceKind: string?)
 		new("WeldConstraint", { Part0 = head, Part1 = cap }, cap)
 	elseif kind == "battery" then
 		want = "Batteries"
+		stage = "item"
 		price = math.random(8, 12)
 		paid = 20
 		maxP = 60
@@ -446,6 +434,10 @@ local function spawnCustomer(forceKind: string?)
 		patience = maxP,
 		maxP = maxP,
 		stage = stage,
+		text = text,
+		shopping = kind ~= "battery",
+		shopT = 0,
+		heldItem = nil,
 		model = m,
 		hum = hum,
 		hrp = hrp,
@@ -458,7 +450,12 @@ local function spawnCustomer(forceKind: string?)
 		panelOpen = false,
 		panelT = 0,
 	}
-	table.insert(S.queue, c)
+	if c.shopping then
+		c.label.Text = "Shopping..."
+		table.insert(S.shoppers, c)
+	else
+		table.insert(S.queue, c)
+	end
 	table.insert(oldStateModels, m)
 end
 
@@ -500,9 +497,18 @@ regPrompt.Triggered:Connect(function(plr)
 		return
 	end
 	if c.stage == "id" then
-		c.stage = "item"
-		c.label.Text = c.want .. "  (ID ok)"
-		toast(plr, "ID checked. Now grab the drink.", GREEN)
+		c.stage = "ring"
+		c.text = c.want .. "  (ID ok)"
+		c.label.Text = c.text
+		toast(plr, "ID checked. Ring them up.", GREEN)
+	elseif c.stage == "ring" then
+		c.stage = "pay"
+		if c.kind == "big" then
+			addRage(14)
+		end
+		c.panelOpen = true
+		c.panelT = 0
+		ChangeEvt:FireClient(plr, "open", c.price, c.paid)
 	elseif c.stage == "item" then
 		local carry = plr:GetAttribute("Carry")
 		if carry == c.want then
@@ -686,7 +692,7 @@ local function step(dt: number)
 		end
 	elseif S.spawnT <= 0 then
 		local cap = math.min(5, 3 + math.floor(S.night / 2))
-		if #S.queue < cap then
+		if #S.queue + #S.shoppers < cap then
 			task.spawn(spawnCustomer)
 		end
 		S.spawnT = ph[2] / nmv * (0.8 + 0.4 * math.random())
@@ -697,6 +703,38 @@ local function step(dt: number)
 	if S.spillT <= 0 and S.t > 30 then
 		S.spillT = 45 / nmv
 		spawnSpill()
+	end
+
+	-- shoppers walk to their shelf, pick up their item, then join the line
+	for _, c in ipairs(table.clone(S.shoppers)) do
+		local stand = SHOP[c.want]
+		local flat = (c.hrp.Position - stand) * Vector3.new(1, 0, 1)
+		if flat.Magnitude > 2.5 then
+			c.hum:MoveTo(Vector3.new(stand.X, c.hrp.Position.Y, stand.Z))
+		else
+			c.shopT += dt
+			if c.shopT > 0.3 and not c.faced then
+				c.faced = true
+				local shelfX = stand.X > 0 and 30 or -30
+				c.hrp.CFrame = CFrame.lookAt(c.hrp.Position, Vector3.new(shelfX, c.hrp.Position.Y, c.hrp.Position.Z))
+			end
+			if c.shopT >= 1.8 then
+				local it = new("Part", {
+					Name = "HeldItem",
+					Size = Vector3.new(1.2, 1.4, 1.2),
+					Color = ITEMS[c.want].color,
+					CanCollide = false,
+					Massless = true,
+					CFrame = c.hrp.CFrame * CFrame.new(0, 0.3, -1.8),
+				}, c.model)
+				new("WeldConstraint", { Part0 = c.hrp, Part1 = it }, it)
+				c.shopping = false
+				c.faced = false
+				c.label.Text = c.text
+				table.remove(S.shoppers, table.find(S.shoppers, c))
+				table.insert(S.queue, c)
+			end
+		end
 	end
 
 	-- customers
@@ -780,6 +818,9 @@ local function step(dt: number)
 		if c.stage == "id" then
 			regPrompt.ActionText = "Check ID"
 			regPrompt.HoldDuration = 2
+		elseif c.stage == "ring" then
+			regPrompt.ActionText = "Ring up " .. c.want
+			regPrompt.HoldDuration = 0.5
 		elseif c.stage == "item" then
 			regPrompt.ActionText = "Hand over " .. c.want
 			regPrompt.HoldDuration = c.kind == "battery" and 1.6 or 0.5
@@ -1049,9 +1090,9 @@ local helpText = text(
 	"QUIK-STOP: NIGHT SHIFT\n\n"
 		.. "Survive 8 hours (10 PM to 6 AM). Keep your health up and your rage down.\n\n"
 		.. "E (hold)  interact: take items, ring up, mop\nQ  put down what you're carrying\nF  \"Be right with you!\" (slows impatience, has a cooldown)\nH  show / hide this help\n\n"
-		.. "Normal customers: fetch the item, hand it over at the REGISTER, then make exact change.\n"
+		.. "Customers shop for themselves. When they reach the counter: RING THEM UP at the register (hold E), then make exact change.\n"
 		.. "Blue cap: energy drink. Check their ID first (hold E).\n"
-		.. "Red cap: batteries on the TOP shelf. Climb the step stool (hold E).\n"
+		.. "Red cap: batteries are on the TOP shelf behind you. Climb the step stool (hold E), then hand them over.\n"
 		.. "Grab batteries BEFORE they reach the counter for a PROACTIVE bonus.\n"
 		.. "Big bills ($50/$100) for small snacks will make you mad. That's the point.\n"
 		.. "Spills: mop them or your health drains.",
@@ -1168,6 +1209,8 @@ task.spawn(function()
 			wantsLbl.Text = "WANTS: " .. want
 			if stage == "id" then
 				stepLbl.Text = "NEXT: check their ID at the register"
+			elseif stage == "ring" then
+				stepLbl.Text = "NEXT: ring it up at the register"
 			elseif stage == "item" then
 				if carry == want then
 					stepLbl.Text = "NEXT: hand it over at the register"
