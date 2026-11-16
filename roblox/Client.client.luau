@@ -1,4 +1,4 @@
--- QUIK-STOP: Night Shift (Roblox port, first pass)
+-- SPEED-E-MART: Night Shift (Roblox port, first pass)
 -- Client script: HUD, order ticket, change panel, toasts, key bindings.
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -173,7 +173,7 @@ help.Visible = false
 help.ZIndex = 25
 local helpText = text(
 	help,
-	"QUIK-STOP: NIGHT SHIFT\n\n"
+	"SPEED-E-MART: NIGHT SHIFT\n\n"
 		.. "Survive 8 hours (10 PM to 6 AM). Keep your health up and your rage down.\n\n"
 		.. "E (hold)  interact: take items, ring up, mop\nQ  put down what you're carrying\nF  \"Be right with you!\" (slows impatience, has a cooldown)\nH  show / hide this help\n\n"
 		.. "Customers shop for themselves. When they reach the counter: RING THEM UP at the register (hold E), then make exact change.\n"

@@ -1,4 +1,4 @@
--- QUIK-STOP: Night Shift  (Roblox port, first pass)
+-- SPEED-E-MART: Night Shift  (Roblox port, first pass)
 -- Server script: builds the store, runs customers, rage, cash, shifts.
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -110,7 +110,7 @@ do
 	new("TextLabel", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
-		Text = "QUIK-STOP",
+		Text = "SPEED-E-MART",
 		TextColor3 = Color3.new(1, 1, 1),
 		Font = Enum.Font.FredokaOne,
 		TextScaled = true,
@@ -959,7 +959,7 @@ task.spawn(function()
 	end
 	task.wait(5)
 	resetState(1)
-	toast(nil, "Night 1 begins. Welcome to QUIK-STOP.", YELLOW)
+	toast(nil, "Night 1 begins. Welcome to SPEED-E-MART.", YELLOW)
 	local last = os.clock()
 	while true do
 		task.wait(0.1)
