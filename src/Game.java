@@ -101,6 +101,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     boolean[] evFired = new boolean[EVENTS.length], evWarned = new boolean[EVENTS.length];
     String phaseName = "";
     static final double AWAY_DRAIN = 1.5;   // extra rage drained per second while you are away from the register
+    static final double CW_RAGE_MULT = 0.8;   // while the co-worker is in the store, all rage gains are 20% lower, on every night
     static final double SNAP_LIMIT = 7.0;   // seconds of sustained high rage before a meltdown
     double rush = 0, swishT, reassureCd = 0; boolean fPressed;
     double sodaLeakT = 12; boolean sodaLeakWarned;
@@ -851,18 +852,19 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
 
     // ---------- rage ----------
     void addRage(double d, String why) {
-        d *= 1 + 0.08 * (night - 1);
+        d *= (1 + 0.08 * (night - 1)) * rageMult();
         rage = Math.min(100, rage + d);
         ft(px, py - 95, "RAGE +" + (int) d + (why.isEmpty() ? "" : "  " + why), new Color(255, 110, 90));
     }
+    double rageMult() { return cwOn ? CW_RAGE_MULT : 1.0; }
     void calmRage(double d) { rage = Math.max(0, rage - d); }
 
     void rageLogic(double dt) {
         rage = Math.max(0, rage - dt * 0.6);
         if (!atRegister()) rage = Math.max(0, rage - dt * AWAY_DRAIN);   // stepping away from the register to do chores cools you off
-        if (queue.size() >= 4) rage = Math.min(100, rage + dt * 2.0);
+        if (queue.size() >= 4) rage = Math.min(100, rage + dt * 2.0 * rageMult());
         Customer c0 = front();
-        if (c0 != null && c0.need == N_SCRATCH && queue.size() >= 2) rage = Math.min(100, rage + dt * 2.4);
+        if (c0 != null && c0.need == N_SCRATCH && queue.size() >= 2) rage = Math.min(100, rage + dt * 2.4 * rageMult());
         // too angry for too long -> you snap
         if (rage >= 80 && panelOpen()) {
             // making change: the snap countdown is frozen (it's not fair to tick while you count out bills)
