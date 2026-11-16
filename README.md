@@ -54,7 +54,7 @@ Freedesktop runtime and bundles OpenJDK 21, so players don't need Java installed
 Install `flatpak` and `flatpak-builder`, then from the project folder:
 
 ```sh
-flatpak install flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.freedesktop.Sdk.Extension.openjdk21//24.08
+flatpak install flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.openjdk21//25.08
 flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.mtsprout.SpeedEMart.yml
 flatpak run io.github.mtsprout.SpeedEMart
 ```
