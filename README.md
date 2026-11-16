@@ -79,3 +79,7 @@ Roblox version doesn't have the co-worker or large-bill change yet).
 ## Android
 
 Not supported. Swing doesn't run on Android, so it would need a port.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
