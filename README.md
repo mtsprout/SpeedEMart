@@ -68,6 +68,9 @@ Enter or Space starts a night from the title screen.
 
 ## Roblox
 
+> **Warning: the Roblox port is garbage. Don't touch it.** It's an unfinished, buggy
+> experiment. Don't build on it, and don't expect it to work.
+
 The `roblox/` folder holds a Luau port of the game. Run `python3 build_roblox.py` to
 rebuild `roblox/QuikStop.rbxlx` from the two scripts, open it in Roblox Studio, and press
 Play. See `ROBLOX_PORT_NOTES.md` for the content swaps and what's still missing (the
