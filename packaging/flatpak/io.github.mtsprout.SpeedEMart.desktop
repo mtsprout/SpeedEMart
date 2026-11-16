@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SPEED-E-MART: Night Shift
+Comment=A cartoon convenience-store night-shift simulator
+Exec=speedemart
+Icon=io.github.mtsprout.SpeedEMart
+Terminal=false
+Categories=Game;ArcadeGame;

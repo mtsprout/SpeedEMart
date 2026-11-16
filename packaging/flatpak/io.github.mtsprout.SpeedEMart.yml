@@ -1,0 +1,35 @@
+app-id: io.github.mtsprout.SpeedEMart
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.openjdk21
+command: speedemart
+finish-args:
+  - --socket=x11        # Swing has no Wayland backend; runs under XWayland
+  - --share=ipc
+  - --socket=pulseaudio # game sound
+modules:
+  # Java runtime (from the SDK extension) into /app/jre
+  - name: openjdk
+    buildsystem: simple
+    build-commands:
+      - /usr/lib/sdk/openjdk21/installjdk.sh
+
+  - name: speedemart
+    buildsystem: simple
+    build-commands:
+      - mkdir -p classes && /usr/lib/sdk/openjdk21/bin/javac --release 17 -d classes src/Game.java
+      - /usr/lib/sdk/openjdk21/bin/jar cfe speedemart.jar Game -C classes .
+      - install -Dm644 speedemart.jar /app/share/speedemart/speedemart.jar
+      - install -Dm755 speedemart.sh /app/bin/speedemart
+      - install -Dm644 packaging/flatpak/io.github.mtsprout.SpeedEMart.desktop /app/share/applications/io.github.mtsprout.SpeedEMart.desktop
+      - install -Dm644 packaging/flatpak/io.github.mtsprout.SpeedEMart.metainfo.xml /app/share/metainfo/io.github.mtsprout.SpeedEMart.metainfo.xml
+      - install -Dm644 packaging/flatpak/io.github.mtsprout.SpeedEMart.svg /app/share/icons/hicolor/scalable/apps/io.github.mtsprout.SpeedEMart.svg
+    sources:
+      - type: dir
+        path: ../..
+      - type: script
+        dest-filename: speedemart.sh
+        commands:
+          - exec /app/jre/bin/java -jar /app/share/speedemart/speedemart.jar "$@"

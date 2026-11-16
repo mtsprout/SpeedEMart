@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mtsprout.SpeedEMart</id>
+  <name>SPEED-E-MART: Night Shift</name>
+  <summary>A cartoon convenience-store simulator built to raise your blood pressure</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Survive an 8-hour night shift, 10 PM to 6 AM. Ring up customers, make exact change, restock, mop, and keep your health up and your rage down. Every night you survive gets 10% harder.</p>
+  </description>
+  <launchable type="desktop-id">io.github.mtsprout.SpeedEMart.desktop</launchable>
+  <url type="homepage">https://github.com/mtsprout/SpeedEMart</url>
+  <url type="bugtracker">https://github.com/mtsprout/SpeedEMart/issues</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-cartoon">mild</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="1.0" date="2026-11-16"/>
+  </releases>
+</component>

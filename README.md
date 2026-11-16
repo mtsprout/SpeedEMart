@@ -47,6 +47,20 @@ java -cp out Game
 runtime, which you can hand to someone who has no JDK. It needs a JDK on the machine
 doing the build. A Windows equivalent isn't set up yet.
 
+### Linux (Flatpak)
+
+A Flatpak manifest lives in `packaging/flatpak/`. It builds the game against the
+Freedesktop runtime and bundles OpenJDK 21, so players don't need Java installed.
+Install `flatpak` and `flatpak-builder`, then from the project folder:
+
+```sh
+flatpak install flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.freedesktop.Sdk.Extension.openjdk21//24.08
+flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.mtsprout.SpeedEMart.yml
+flatpak run io.github.mtsprout.SpeedEMart
+```
+
+Note: this has not been built or tested yet. It isn't on Flathub.
+
 ## Controls
 
 | Key | Action |
