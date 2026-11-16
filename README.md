@@ -49,17 +49,31 @@ doing the build. A Windows equivalent isn't set up yet.
 
 ### Linux (Flatpak)
 
-A Flatpak manifest lives in `packaging/flatpak/`. It builds the game against the
-Freedesktop runtime and bundles OpenJDK 21, so players don't need Java installed.
-Install `flatpak` and `flatpak-builder`, then from the project folder:
+Download `SpeedEMart.flatpak` from the
+[latest release](https://github.com/mtsprout/SpeedEMart/releases/latest) and install it.
+Java is bundled, so you don't need a JDK. You do need Flatpak with the
+[Flathub](https://flathub.org/setup) remote set up, since the Freedesktop runtime is
+fetched from there.
+
+```sh
+flatpak install SpeedEMart.flatpak
+flatpak run io.github.mtsprout.SpeedEMart
+```
+
+Notes: the bundle is x86_64 only and about 400 MB (it includes a full JDK). It builds
+cleanly on GitHub Actions, but it hasn't been run on real Linux hardware yet, so
+please report problems. It isn't on Flathub.
+
+To build it yourself, install `flatpak` and `flatpak-builder`, then from the project folder:
 
 ```sh
 flatpak install flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.openjdk21//25.08
 flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.mtsprout.SpeedEMart.yml
-flatpak run io.github.mtsprout.SpeedEMart
 ```
 
-Note: this has not been built or tested yet. It isn't on Flathub.
+The manifest is in `packaging/flatpak/`. The workflow `.github/workflows/flatpak.yml`
+builds it on every change to the game, and pushing a tag like `v1.1` publishes a new
+release with the bundle attached.
 
 ## Controls
 
