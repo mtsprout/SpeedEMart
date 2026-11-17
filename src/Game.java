@@ -115,9 +115,46 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     double nm() { return 1 + 0.10 * (night - 1); }
     double robLimit() { return Math.max(12, ROB_LIMIT - 2 * (night - 1)); }
     int runScore, lastShiftScore;   // running total over the shifts you survived, and the shift that just ended
+    static final int MAX_STRIKES = 3;   // times you can be fired in one run; the last one ends the run
+    int strikes, bestNight, bestScore;   // strikes this run; best night survived and best run score this session
+    boolean runOver;                     // true once the final strike has landed
+
+    /** Where the best night/score is kept: the platform's per-user app-data folder (override with -Dspeedemart.data=DIR). */
+    static java.nio.file.Path saveFile() {
+        String over = System.getProperty("speedemart.data"), home = System.getProperty("user.home", "."), os = System.getProperty("os.name", "").toLowerCase();
+        java.nio.file.Path dir;
+        if (over != null) dir = java.nio.file.Paths.get(over);
+        else if (os.contains("win") && System.getenv("APPDATA") != null) dir = java.nio.file.Paths.get(System.getenv("APPDATA"), "SpeedEMart");
+        else if (os.contains("mac")) dir = java.nio.file.Paths.get(home, "Library", "Application Support", "SpeedEMart");
+        else {   // Linux, including the Flatpak sandbox (XDG_DATA_HOME points at its private data folder)
+            String x = System.getenv("XDG_DATA_HOME");
+            dir = (x != null && !x.isEmpty() ? java.nio.file.Paths.get(x) : java.nio.file.Paths.get(home, ".local", "share")).resolve("speedemart");
+        }
+        return dir.resolve("best.properties");
+    }
+    void loadBest() {
+        try {
+            java.nio.file.Path f = saveFile();
+            if (!java.nio.file.Files.exists(f)) return;
+            Properties p = new Properties();
+            try (java.io.InputStream in = java.nio.file.Files.newInputStream(f)) { p.load(in); }
+            bestNight = Math.max(0, Integer.parseInt(p.getProperty("bestNight", "0").trim()));
+            bestScore = Math.max(0, Integer.parseInt(p.getProperty("bestScore", "0").trim()));
+        } catch (Exception e) { /* no save, or an unreadable one: start fresh */ }
+    }
+    void saveBest() {
+        try {
+            java.nio.file.Path f = saveFile();
+            java.nio.file.Files.createDirectories(f.getParent());
+            Properties p = new Properties();
+            p.setProperty("bestNight", "" + bestNight); p.setProperty("bestScore", "" + bestScore);
+            try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(f)) { p.store(out, "SPEED-E-MART best results"); }
+        } catch (Exception e) { /* read-only or missing folder: the game just doesn't remember */ }
+    }
     void startNext() {
-        if (scene == Scene.TITLE) { night = 1; runScore = 0; }
-        else if (scene == Scene.WIN) night++;     // survived: next night is harder. Fired: retry the same night.
+        if (scene == Scene.OVER && runOver) { scene = Scene.TITLE; return; }   // run is over: back to the title, then start a new one
+        if (scene == Scene.TITLE) { night = 1; runScore = 0; strikes = 0; runOver = false; }
+        else if (scene == Scene.WIN) night++;     // survived: next night is harder. Fired (strikes left): retry the same night.
         newGame();
     }
     double robT = 0, robCd = 0; int robbedTotal = 0, robberies = 0;          // rush: 0..1, rises as you succeed, falls when customers storm out
@@ -177,6 +214,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         setPreferredSize(new Dimension(W, H));
         setFocusable(true);
         addKeyListener(this);
+        loadBest();
         addFocusListener(new java.awt.event.FocusAdapter() {   // a key released while another window had focus would stay "held"
             public void focusLost(java.awt.event.FocusEvent e) { up = down = left = right = sprint = eDown = false; }
         });
@@ -255,7 +293,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             dt *= 0.3;                         // the rest of the world drops into slow motion
         }
         t += dt;
-        if (t >= SHIFT) { scene = Scene.WIN; lastShiftScore = shiftScore(true); runScore += lastShiftScore; Snd.play("win"); return; }
+        if (t >= SHIFT) { scene = Scene.WIN; lastShiftScore = shiftScore(true); runScore += lastShiftScore; bestNight = Math.max(bestNight, night); bestScore = Math.max(bestScore, runScore); saveBest(); Snd.play("win"); return; }
         stun -= dt; shake -= dt; toastT -= dt;
         movePlayer(dt);
         beatLogic(rdt);
@@ -1220,7 +1258,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (rage > 70) d += 0.2;
         d *= night > 1 ? 1 + 0.08 * (night - 1) : lerp(0.5, 1.0, t / 180.0);   // night 1: gentle first 3 minutes; later nights drain faster
         health = Math.max(0, Math.min(100, health - d * dt));
-        if (health <= 0) { scene = Scene.OVER; lastShiftScore = shiftScore(false); Snd.play("lose"); }   // a shift you got fired in does not count toward the running total
+        if (health <= 0) { scene = Scene.OVER; strikes++; runOver = strikes >= MAX_STRIKES; lastShiftScore = shiftScore(false); Snd.play("lose"); }   // a shift you got fired in does not count toward the running total
     }
 
     void toast(String s) { toast = s; toastT = 3.2; }
@@ -1760,6 +1798,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (!cs.isEmpty()) text(g, cs, 150, 91, fSm, new Color(130, 230, 170), false);
         else if (nearCash) text(g, "1s:" + drawer[0] + "  5s:" + drawer[1] + "  10s:" + drawer[2] + "  20s:" + drawer[3] + "  big:$" + bigPile(), 150, 91, fXs, new Color(200, 210, 230), false);
 
+        // strikes: how many more times you can be fired this run
+        g.setColor(new Color(20, 22, 45, 225)); g.fillRoundRect(10, 108, 150, 24, 12, 12);
+        text(g, "STRIKES", 20, 125, fXs, Color.WHITE, false);
+        for (int i = 0; i < MAX_STRIKES; i++) { g.setColor(i < strikes ? new Color(240, 70, 70) : new Color(90, 95, 120)); g.fillOval(92 + i * 20, 113, 14, 14); }
+
         // ---------- bottom-right card: time, night, phase, traffic ----------
         int mins = (int) (prog() * 480);
         int hh = (22 + mins / 60) % 24, mm = mins % 60;
@@ -1895,8 +1938,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 "",
                 "Cigarettes are on the TOP shelf. Yes, you have to climb up for them. Every. Time.",
                 "Big bills, scratcher marathons, and people who need you RIGHT NOW",
-                "will interrupt whatever you're doing. Survive until 6 AM."};
-        for (int i = 0; i < l.length; i++) text(g, l[i], W / 2.0, 280 + i * 30, fSm, Color.WHITE, true);
+                "will interrupt whatever you're doing. Survive until 6 AM.",
+                "",
+                "THREE STRIKES: get fired " + MAX_STRIKES + " times in one run and you're out for good."};
+        for (int i = 0; i < l.length; i++) text(g, l[i], W / 2.0, 240 + i * 28, fSm, i == l.length - 1 ? new Color(255, 190, 120) : Color.WHITE, true);
+        if (bestNight > 0) text(g, "BEST EVER: survived night " + bestNight + "   |   score " + bestScore, W / 2.0, 602, fSm, new Color(120, 240, 150), true);
         if ((int) (System.currentTimeMillis() / 500) % 2 == 0) text(g, "PRESS ENTER TO CLOCK IN", W / 2.0, 640, fMid, new Color(255, 230, 70), true);
         text(g, "H = full help & controls     M = sound on/off", W / 2.0, 676, fSm, Color.WHITE, true);
     }
@@ -1924,8 +1970,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     void drawEnd(Graphics2D g, boolean win) {
         g.setColor(new Color(0, 0, 0, 170)); g.fillRect(0, 0, W, H);
         blockHdr(g, W / 2.0 - 280, 30, 560, 660, new Color(50, 60, 95), 28, 120);
-        text(g, win ? "SHIFT OVER! 6:00 AM" : "YOU'RE FIRED", W / 2.0, 92, fBig, win ? new Color(120, 240, 150) : new Color(255, 100, 100), true);
-        text(g, win ? "You survived night " + night + ". The next one will be harder." : "The store fell apart. Manager is NOT happy.", W / 2.0, 128, fSm, Color.WHITE, true);
+        text(g, win ? "SHIFT OVER! 6:00 AM" : runOver ? "YOU'RE FIRED. FOR GOOD." : "YOU'RE FIRED", W / 2.0, 92, fBig, win ? new Color(120, 240, 150) : new Color(255, 100, 100), true);
+        text(g, win ? "You survived night " + night + ". The next one will be harder." : runOver ? "Strike " + strikes + " of " + MAX_STRIKES + ". The manager has had ENOUGH." : "The store fell apart. Manager is NOT happy.  Strike " + strikes + " of " + MAX_STRIKES + ".", W / 2.0, 128, fSm, Color.WHITE, true);
         String[] rows = {"Tips earned: $" + tips, "Happy customers: " + happy, "Angry walkouts: " + angryCt,
                 "Best combo: x" + bestCombo, "Customers served: " + served, "Robbed: " + robberies + "x  ($" + robbedTotal + " lost)"};
         for (int i = 0; i < rows.length; i++) text(g, rows[i], W / 2.0, 176 + i * 26, fSm, Color.WHITE, true);
@@ -1941,8 +1987,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             }
         } else text(g, "No bonuses when you get fired.", W / 2.0, 390, fSm, new Color(150, 155, 180), true);
         text(g, "SHIFT SCORE: " + lastShiftScore, W / 2.0, 548, fMid, new Color(255, 225, 60), true);
-        text(g, win ? "RUNNING TOTAL: " + runScore : "RUNNING TOTAL: " + runScore + "  (this shift doesn't count)", W / 2.0, 578, fMid, win ? new Color(120, 240, 150) : new Color(190, 195, 215), true);
-        text(g, win ? "Clock in for night " + (night + 1) + "?" : "Beg for your job back (retry night " + night + ")?", W / 2.0, 608, fSm, new Color(255, 225, 60), true);
+        text(g, win ? "RUNNING TOTAL: " + runScore : runOver ? "FINAL SCORE: " + runScore + "   (best night survived: " + (night - 1) + ")" : "RUNNING TOTAL: " + runScore + "  (this shift doesn't count)", W / 2.0, 578, fMid, win ? new Color(120, 240, 150) : new Color(190, 195, 215), true);
+        text(g, win ? "Clock in for night " + (night + 1) + "?" : runOver ? "Back to the title screen." : "Beg for your job back (retry night " + night + ", " + (MAX_STRIKES - strikes) + " strike" + (MAX_STRIKES - strikes == 1 ? "" : "s") + " left)?", W / 2.0, 608, fSm, new Color(255, 225, 60), true);
         double by = 626, bw = 220, bh = 50;
         endBtn[0] = new Rectangle2D.Double(W / 2.0 - bw - 14, by, bw, bh);
         endBtn[1] = new Rectangle2D.Double(W / 2.0 + 14, by, bw, bh);

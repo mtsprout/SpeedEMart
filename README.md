@@ -94,6 +94,14 @@ release with the bundle attached.
 
 Enter or Space starts a night from the title screen.
 
+**Three strikes:** if your health hits zero you're fired and retry the same night, but that
+costs a strike. Get fired three times in one run and the run is over, back to night 1.
+Your strikes show in the top-left of the screen.
+
+Your best night and best score are saved between sessions in `best.properties`, in
+`~/Library/Application Support/SpeedEMart` (Mac), `%APPDATA%\SpeedEMart` (Windows) or
+`~/.local/share/speedemart` (Linux). Delete the file to reset them.
+
 ## Roblox
 
 > **Warning: the Roblox port is garbage. Don't touch it.** It's an unfinished, buggy
