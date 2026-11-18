@@ -52,7 +52,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     static final int T_NORMAL = 0, T_BIG = 1, T_CIG = 2, T_SCRATCH = 3, T_ASK = 4, T_BEER = 5, T_ROB = 6;
     static final int N_RING = 0, N_PACK = 1, N_CARD = 2, N_PAY = 3, N_SCRATCH = 4, N_ASK = 5, N_ID = 6;
     static final int S_SHOP = 0, S_BROWSE = 1, S_QUEUE = 2, S_LEAVE = 3, S_ASKGO = 4, S_ASK = 5, S_ROBGO = 6, S_ROBTAKE = 7;
-    static final int C_NONE = 0, C_BOX = 2, C_PACK = 3;
+    static final int C_NONE = 0, C_BOX = 2, C_PACK = 3, C_GROUNDS = 4;
 
     // ---------- fonts / palette ----------
     Font fBig = new Font("Arial Rounded MT Bold", Font.BOLD, 46);
@@ -153,7 +153,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     }
     void startNext() {
         if (scene == Scene.OVER && runOver) { scene = Scene.TITLE; return; }   // run is over: back to the title, then start a new one
-        if (scene == Scene.TITLE) { night = 1; runScore = 0; strikes = 0; runOver = false; }
+        if (scene == Scene.TITLE) { night = Math.max(1, Integer.getInteger("speedemart.night", 1)); runScore = 0; strikes = 0; runOver = false; }
         else if (scene == Scene.WIN) night++;     // survived: next night is harder. Fired (strikes left): retry the same night.
         newGame();
     }
@@ -172,6 +172,27 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     double[] climbPr = new double[1], safePr = new double[1];
     boolean drawerWarned;
     Task heldTask, activeTask;
+    // vape spot in the back room: a big rage calmer, rationed so it can't just be spammed
+    static final int VAPE_MAX = 3;                                   // hits per shift
+    static final double VAPE_CD = 45, VAPE_BUZZ = 4, VAPE_CALM = 30, VAPE_SLOW = 0.6;   // cooldown (s), buzz (s), rage taken off, walking speed while buzzed
+    final Point2D.Double vapeP = new Point2D.Double(172, 150);
+    int vapeUses; double vapeCd, buzzT; double[] vapePr = new double[1];
+    static class Puff { double x, y, vx, vy, life, max, r; }
+    List<Puff> puffs = new ArrayList<>();
+    // coffee pot (from night 5): at 4:30 AM the morning crew wants a FRESH pot by 5:30. Dump the old one, fetch grounds from the back room, brew.
+    // Not a hard fail: a pot on time pays a bonus and calms the morning crowd; no pot makes them grumpier.
+    static final int COFFEE_NIGHT = 5, COFFEE_START = 390, COFFEE_DEADLINE = 450;   // night it begins; game-minutes after 10 PM (390 = 4:30 AM, 450 = 5:30 AM)
+    static final double BREW_TIME = 30;                                              // seconds (= game minutes) to brew
+    static final int COFFEE_BONUS = 200;                                             // shift-score bonus for a pot ready by the deadline
+    static final double COFFEE_HAPPY = 0.85, COFFEE_ANGRY = 1.2;                     // rage-gain multiplier after the deadline: pot on time / no pot
+    static final int CF_STALE = 1, CF_EMPTY = 2, CF_BREW = 3, CF_READY = 4;
+    /** Dev/playtest: NIGHT=5 ./run.sh starts a run on night 5. Such runs don't touch your saved best records. */
+    static final boolean TEST_START = Integer.getInteger("speedemart.night", 1) > 1;
+    final Rectangle2D.Double coffeeR = new Rectangle2D.Double(840, 46, 160, 56);   // the counter the machine sits on
+    final Point2D.Double coffeeP = new Point2D.Double(920, 136), groundsP = new Point2D.Double(297, 138);
+    int coffeeStage; double brewT; boolean coffeeOnTime, coffeeAnnounced, coffeeWarned, coffeeVerdict; double[] dumpPr = new double[1], brewPr = new double[1];
+    boolean coffeeNight() { return night >= COFFEE_NIGHT; }
+    boolean safeDone;   // a drop/buy cycle at the safe just finished: the safe does nothing more until E is released
     // co-worker: one call-in per shift; costs half your tips; does chores (not customers or cash) until closing
     boolean cwConfirm; Rectangle2D.Double[] cwBtn = new Rectangle2D.Double[2];   // "call co-worker?" dialog: Yes, No
     boolean cwLeaving; double cwLeft;   // minutes (= seconds of game time) they have left; they walk out when it runs out
@@ -262,7 +283,9 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         for (Shelf s : shelves) { s.stock = 6 + rnd.nextInt(4); s.face = 80 + rnd.nextInt(20); }
         spawnT = 6; spillT = 40; toast = ""; drawerWarned = false; rush = Math.min(0.5, 0.06 * (night - 1)); help = false;
         robT = 0; robCd = 40; robbedTotal = 0; robberies = 0;
-        cwConfirm = false; snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
+        walls.remove(coffeeR); if (coffeeNight()) walls.add(coffeeR);
+        coffeeStage = coffeeNight() ? CF_STALE : 0; brewT = 0; coffeeOnTime = coffeeAnnounced = coffeeWarned = coffeeVerdict = false; dumpPr[0] = brewPr[0] = 0;
+        cwConfirm = false; safeDone = false; vapeUses = 0; vapeCd = 0; buzzT = 0; vapePr[0] = 0; puffs.clear(); snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
         sodaLeakT = 12; sodaLeakWarned = false; cineOn = false; beatT = 0; beatTarget = null; hitFlash = 0; packEarly = false;
         rage = 0; snapT = 0; snapWarned = false; trickleT = 22; burstLeft = 0; burstForce = -1; burstT = 0; nSpawned = 0; phaseIdx = -1; phaseName = "";
         Arrays.fill(evFired, false); Arrays.fill(evWarned, false);
@@ -293,12 +316,14 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             dt *= 0.3;                         // the rest of the world drops into slow motion
         }
         t += dt;
-        if (t >= SHIFT) { scene = Scene.WIN; lastShiftScore = shiftScore(true); runScore += lastShiftScore; bestNight = Math.max(bestNight, night); bestScore = Math.max(bestScore, runScore); saveBest(); Snd.play("win"); return; }
+        if (t >= SHIFT) { scene = Scene.WIN; lastShiftScore = shiftScore(true); runScore += lastShiftScore; if (!TEST_START) { bestNight = Math.max(bestNight, night); bestScore = Math.max(bestScore, runScore); saveBest(); } Snd.play("win"); return; }
         stun -= dt; shake -= dt; toastT -= dt;
         movePlayer(dt);
         beatLogic(rdt);
         handleTasks(dt);
         coworkerLogic(dt);
+        vapeLogic(dt);
+        coffeeLogic(dt);
         reassureCd -= dt;
         if (fPressed) reassure();
         if (qPressed && carry != C_NONE) { dropCarry(); Snd.play("thud"); }
@@ -354,6 +379,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (sprint && carry == C_NONE) sp = 260;
         if (carry == C_BOX) sp = 140;
         if (heldTask != null) sp *= 0.7;
+        if (buzzT > 0) sp *= VAPE_SLOW;
         moveAxis(dx * sp * dt, 0);
         moveAxis(0, dy * sp * dt);
     }
@@ -397,6 +423,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     void dropCarry() {
         if (carry == C_BOX) { carry = C_NONE; ft(px, py - 60, "dropped box", Color.WHITE); }
         else if (carry == C_PACK) { carry = C_NONE; packEarly = false; ft(px, py - 60, "put pack back", Color.WHITE); }
+        else if (carry == C_GROUNDS) { carry = C_NONE; ft(px, py - 60, "put grounds back", Color.WHITE); }
     }
 
     // =====================================================================
@@ -482,6 +509,26 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             if (can)
                 L.add(holdDur("chg", "BUY CASH: restock small bills from the safe", 5, safeP.x, safeP.y, 1.1, safePr, this::grabChange, 0.5));
         }
+        // --- coffee pot (night 5+, from 4:30 AM)
+        if (coffeeNight() && prog() * 480 >= COFFEE_START && coffeeStage != CF_BREW && coffeeStage != CF_READY) {
+            if (dist(px, py, coffeeP.x, coffeeP.y) < 60) {
+                if (coffeeStage == CF_STALE)
+                    L.add(holdDur("cdump", "DUMP the old coffee", 7, coffeeP.x, coffeeP.y, 1.5, dumpPr, () -> {
+                        coffeeStage = CF_EMPTY; health = Math.min(100, health + 2); toast("Old pot dumped. Now fetch coffee grounds from the back room."); Snd.play("clink"); }, 0.5));
+                else if (carry == C_GROUNDS)
+                    L.add(holdDur("cbrew", "BREW a fresh pot", 7, coffeeP.x, coffeeP.y, 1.5, brewPr, () -> {
+                        coffeeStage = CF_BREW; brewT = 0; carry = C_NONE; toast("Brewing! It needs " + (int) BREW_TIME + " minutes."); Snd.play("bell"); }, 0.5));
+                else L.add(tap("cneed", "Need coffee grounds from the back room", 7, coffeeP.x, coffeeP.y, () -> toast("No grounds yet. The sack is in the back room.")));
+            }
+            if (coffeeStage == CF_EMPTY && carry == C_NONE && dist(px, py, groundsP.x, groundsP.y) < 40)
+                L.add(tap("grounds", "Grab the coffee grounds", 7, groundsP.x, groundsP.y, () -> { carry = C_GROUNDS; ft(px, py - 70, "got the grounds", Color.WHITE); }));
+        }
+        // --- vape spot (back room)
+        if (dist(px, py, vapeP.x, vapeP.y) < 45) {
+            if (vapeUses >= VAPE_MAX) L.add(tap("vapeno", "Vape is empty. No more hits this shift.", 8, vapeP.x, vapeP.y, () -> toast("The vape is dead. You're on your own.")));
+            else if (vapeCd > 0) L.add(tap("vapewait", "Vape: give it " + (int) Math.ceil(vapeCd) + "s", 8, vapeP.x, vapeP.y, () -> toast("Easy there. Wait " + (int) Math.ceil(vapeCd) + "s for another hit.")));
+            else L.add(holdDur("vape", "VAPE BREAK (" + (VAPE_MAX - vapeUses) + " left): rage -" + (int) VAPE_CALM, 7, vapeP.x, vapeP.y, 1.5, vapePr, this::vapeHit, 0.5));
+        }
         // --- boxes / stocking
         if (carry == C_NONE && dist(px, py, boxPile.x, boxPile.y) < 70)
             L.add(tap("box", "Grab a case of stock", 6, boxPile.x, boxPile.y, () -> carry = C_BOX));
@@ -538,6 +585,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
 
     void handleTasks(double dt) {
         heldTask = null;
+        if (!eDown) safeDone = false;
         List<Task> L = buildTasks();
         Task best = null; double bd = 1e9;
         for (Task k : L) {
@@ -549,7 +597,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (best.id.equals("climb") && eDown && stun <= 0) climbing = true; else climbing = false;
         if (stun > 0) return;
         if (best.hold) {
-            if (eDown) {
+            boolean atSafe = best.id.equals("drop") || best.id.equals("chg");
+            if (eDown && !(atSafe && safeDone)) {
                 best.work.accept(dt); heldTask = best;
                 swishT -= dt;
                 if (swishT <= 0) { Snd.play(best.id.equals("climb") ? "creak" : "swish"); swishT = 0.32; }
@@ -583,12 +632,58 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         health = Math.min(100, health + 3 + v / 100.0);
         toast("Dropped $" + v + " into the safe."); drawerWarned = false; Snd.play("clink");
     }
+    void vapeHit() {
+        vapeUses++; vapeCd = VAPE_CD; buzzT = VAPE_BUZZ;
+        int before = (int) Math.round(rage); calmRage(VAPE_CALM); int dropped = before - (int) Math.round(rage);
+        ft(px, py - 95, "RAGE -" + dropped + "  ahhh...", new Color(130, 230, 170));
+        for (Customer c : queue) c.pat = Math.max(0.05, c.pat - 0.05);   // the line saw that
+        if (!queue.isEmpty()) say(queue.get(0), new String[]{"Are you VAPING right now?!", "Seriously? I'm standing right here.", "Is that... allowed?"}[rnd.nextInt(3)], 3);
+        for (int i = 0; i < 7; i++) {
+            Puff q = new Puff(); q.x = px + (rnd.nextDouble() - 0.5) * 16; q.y = py - 24 - rnd.nextDouble() * 10;
+            q.vx = (rnd.nextDouble() - 0.5) * 36; q.vy = -22 - rnd.nextDouble() * 22; q.max = q.life = 1.4 + rnd.nextDouble(); q.r = 6 + rnd.nextDouble() * 4; puffs.add(q);
+        }
+        Snd.play("puff");
+        toast("Vape break: rage -" + dropped + ", but you're buzzing for a few seconds. " + (VAPE_MAX - vapeUses) + " left.");
+    }
+
+    void coffeeLogic(double dt) {
+        if (!coffeeNight()) return;
+        double mm = prog() * 480;
+        if (!coffeeAnnounced && mm >= COFFEE_START) {
+            coffeeAnnounced = true; Snd.play("bell");
+            toast("4:30 AM: the morning crew wants FRESH coffee by 5:30. Dump the old pot, grab grounds, brew!");
+        }
+        if (coffeeStage == CF_BREW) {
+            brewT += dt;
+            if (brewT >= BREW_TIME) {
+                coffeeStage = CF_READY; coffeeOnTime = mm <= COFFEE_DEADLINE; Snd.play("kaching");
+                toast(coffeeOnTime ? "Fresh coffee is ready for the morning crew!" : "The coffee is finally ready. A little late...");
+            }
+        }
+        if (!coffeeWarned && mm >= COFFEE_DEADLINE - 15 && coffeeStage != CF_BREW && coffeeStage != CF_READY) {
+            coffeeWarned = true; toast("Morning crew in 15 minutes and there's NO coffee!");
+        }
+        if (!coffeeVerdict && mm >= COFFEE_DEADLINE) {
+            coffeeVerdict = true;
+            toast(coffeeOnTime ? "5:30 AM. The morning crew gets their fresh coffee. They're in a great mood." : "5:30 AM and no coffee. The morning crew is NOT happy.");
+        }
+    }
+
+    void vapeLogic(double dt) {
+        vapeCd = Math.max(0, vapeCd - dt); buzzT = Math.max(0, buzzT - dt);
+        for (Iterator<Puff> it = puffs.iterator(); it.hasNext(); ) {
+            Puff q = it.next(); q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.r += 14 * dt;
+            if (q.life <= 0) it.remove();
+        }
+    }
+
     void grabChange() {
         for (int i = 0; i < 4; i++) {
             int take = Math.min(TARGET[i] - drawer[i], safe[i]);
             if (take > 0) { drawer[i] += take; safe[i] -= take; }
         }
         toast("Bought cash: drawer restocked with small bills."); Snd.play("clink");
+        safeDone = true;   // drop -> buy is one cycle; holding E must not start another drop
     }
     boolean canMake(int due) {
         for (int h = 0; h <= big[1] - bigGiven[1]; h++)
@@ -881,6 +976,13 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
 
     void drawCoworkerHint(Graphics2D g) {
         if (panelOpen()) return;   // the change panel sits over that corner
+        if (coffeeNight() && prog() * 480 >= COFFEE_START && !(coffeeStage == CF_READY && prog() * 480 > COFFEE_DEADLINE + 10)) {
+            boolean late = prog() * 480 >= COFFEE_DEADLINE;
+            String ch = coffeeStage == CF_STALE ? "Coffee: dump the old pot" : coffeeStage == CF_EMPTY ? (carry == C_GROUNDS ? "Coffee: brew it at the pot" : "Coffee: grab grounds (back room)")
+                    : coffeeStage == CF_BREW ? "Coffee: brewing, " + (int) Math.ceil(BREW_TIME - brewT) + "s" : "Coffee: READY!";
+            Color cb = coffeeStage == CF_READY ? new Color(130, 230, 170) : late ? new Color(240, 90, 80) : new Color(255, 215, 90);
+            hintBox(g, ch + (coffeeStage == CF_READY ? "" : late ? "  (late!)" : "  (by 5:30)"), 10, H - 165, cb);
+        }
         if (cwOn) hintBox(g, cwLeaving ? "Co-worker is leaving" : "Co-worker: " + (int) Math.ceil(cwLeft) + " min left", 10, H - 120, new Color(150, 200, 255));
         else if (!cwUsed) {
             if (rage > 50) hintBox(g, "[C]  call co-worker  (-$" + tips / 2 + " tips, " + cwMinutes() + " min)", 10, H - 120, new Color(130, 230, 170));
@@ -894,7 +996,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         rage = Math.min(100, rage + d);
         ft(px, py - 95, "RAGE +" + (int) d + (why.isEmpty() ? "" : "  " + why), new Color(255, 110, 90));
     }
-    double rageMult() { return cwOn ? CW_RAGE_MULT : 1.0; }
+    double rageMult() {
+        double m = cwOn ? CW_RAGE_MULT : 1.0;
+        if (coffeeNight() && prog() * 480 >= COFFEE_DEADLINE) m *= coffeeOnTime ? COFFEE_HAPPY : coffeeStage == CF_READY ? 1.0 : COFFEE_ANGRY;
+        return m;
+    }
     void calmRage(double d) { rage = Math.max(0, rage - d); }
 
     void rageLogic(double dt) {
@@ -1277,9 +1383,14 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         }
         if (k == KeyEvent.VK_H || k == KeyEvent.VK_F1 || k == KeyEvent.VK_P || (help && k == KeyEvent.VK_ESCAPE)) {
             if (k == KeyEvent.VK_P && scene != Scene.PLAY) return;
-            help = !help; up = down = left = right = eDown = false; return;
+            if (!help) helpPage = 0; help = !help; up = down = left = right = eDown = false; return;
         }
-        if (help) return;
+        if (help) {   // turn the help page
+            if (k == KeyEvent.VK_RIGHT || k == KeyEvent.VK_D || k == KeyEvent.VK_DOWN) helpPage = Math.min(HELP_PAGES - 1, helpPage + 1);
+            else if (k == KeyEvent.VK_LEFT || k == KeyEvent.VK_A || k == KeyEvent.VK_UP) helpPage = Math.max(0, helpPage - 1);
+            else if (k == KeyEvent.VK_SPACE || k == KeyEvent.VK_ENTER || k == KeyEvent.VK_TAB) helpPage = (helpPage + 1) % HELP_PAGES;
+            return;
+        }
         if (scene == Scene.TITLE || scene == Scene.OVER || scene == Scene.WIN) {
             if (k == KeyEvent.VK_ENTER || k == KeyEvent.VK_SPACE) startNext();
             else if (scene != Scene.TITLE && (k == KeyEvent.VK_ESCAPE || k == KeyEvent.VK_Q)) System.exit(0);
@@ -1332,6 +1443,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     }
 
     public void mousePressed(MouseEvent e) {
+        if (help) { helpPage = e.getX() < W / 2 && helpPage > 0 ? helpPage - 1 : (helpPage + 1) % HELP_PAGES; return; }   // a click turns the help page
         if (cwConfirm) {
             if (cwBtn[0] != null && cwBtn[0].contains(e.getX(), e.getY())) callCoworker();
             else if (cwBtn[1] != null && cwBtn[1].contains(e.getX(), e.getY())) cwConfirm = false;
@@ -1384,6 +1496,10 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             if (o instanceof Customer) drawCustomer(g, (Customer) o); else if ("coworker".equals(o)) drawCoworker(g); else drawPlayer(g);
         }
         for (Customer c : customers) drawBubble(g, c);
+        for (Puff q : puffs) {
+            int a = (int) Math.max(0, Math.min(150, q.life / q.max * 150));
+            g.setColor(new Color(235, 235, 248, a)); g.fill(new Ellipse2D.Double(q.x - q.r, q.y - q.r, 2 * q.r, 2 * q.r));
+        }
         for (FT f : fts) {
             g.setFont(fMid); int a = (int) Math.max(0, Math.min(255, f.life * 255));
             g.setColor(new Color(0, 0, 0, a / 2)); g.drawString(f.s, (int) f.x - g.getFontMetrics().stringWidth(f.s) / 2 + 2, (int) f.y + 2);
@@ -1464,65 +1580,97 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             text(g, cineCaption, W / 2.0, H - bar / 2.0 + 8, fMid, Color.WHITE, true);
     }
 
+    static final int HELP_PAGES = 2;
+    int helpPage;   // 0 = the basics, 1 = customers and extras
+
     void drawHelp(Graphics2D g) {
-        g.setColor(new Color(10, 12, 30, 242)); g.fillRect(0, 0, W, H);
-        text(g, "HOW TO SURVIVE THE NIGHT SHIFT", W / 2.0, 62, fBig, new Color(255, 230, 70), true);
-        text(g, "press H, F1 or ESC to go back" + (scene == Scene.PLAY ? " (game is paused)" : ""), W / 2.0, 90, fSm, new Color(200, 205, 230), true);
-        String[][] colL = {
-            {"CONTROLS", ""},
-            {"W A S D / arrows", "walk  (Shift = sprint)"},
-            {"E  (tap)", "grab box, hand over pack, stock"},
-            {"E  (HOLD)", "chores, ring up, climb for the cigs"},
-            {"Q", "put down whatever you're carrying"},
-            {"F", "\"Be right with you!\" calms the line (15s+ cooldown; weaker each night)"},
-            {"C", "co-worker: rage over 50%, once a shift, costs half your tips"},
-            {"1 - 6  / mouse", "add $1/$5/$10/$20/$50/$100  (Backspace = clear)"},
-            {"ENTER / SPACE", "hand over the change (must be EXACT)"},
-            {"H  /  M  /  P", "help  /  mute sound  /  pause"},
-            {"", ""},
-            {"THE YELLOW PROMPT", "at the bottom tells you what E will do right now"},
-            {"THE DASHED RING", "marks the thing you're about to use"},
-            {"EACH NIGHT", "you survive makes the next one ~10% harder"},
-        };
-        String[][] colR = {
-            {"KEEPING THE STORE ALIVE", ""},
-            {"STORE HEALTH", "drains all night. Fill it with chores:"},
-            {"  Mop spills", "stand on the blue puddle, hold E"},
-            {"  Soda machine / rug", "hold E when dirty (a dirty soda machine leaks!)"},
-            {"  Stock shelves", "box from BACK ROOM, tap E at a shelf"},
-            {"  Front-face", "hold E at a messy shelf"},
-            {"  Safe: DROP CASH", "move extra/big bills to the safe (over $350 = bad)"},
-            {"  Safe: BUY CASH", "restock small bills when the drawer runs low"},
-            {"TRAFFIC", "bar at bottom right: climbs when you do well,"},
-            {"", "drops when people storm out."},
-            {"ROBBERY", "drawer over $350 for ~25s: a robber comes. DROP CASH!"},
-            {"TIPS & COMBO", "serve fast (green bar) for tips"},
-            {"RAGE-O-METER", "big bills, interruptions, walkouts raise it;"},
-            {"", "chores, happy customers and F cool it."},
-            {"", "Above 80% for 7s you SNAP: you grab the mop"},
-            {"", "and beat the nearest customer (-12 health)."},
-        };
-        drawHelpCol(g, colL, 70, 125);
-        drawHelpCol(g, colR, 670, 125);
-        double y = 516;
-        block(g, 60, y, 1160, 192, new Color(50, 60, 95), 20);
-        text(g, "CUSTOMER FIELD GUIDE", 90, y + 32, fMid, new Color(255, 230, 70), false);
-        String[] f = {
-            "Top hat (big bills):  pays with $50/$100. Make exact change. Out of small bills? Run to the safe and BUY CASH.",
-            "Red cap (cigarettes):  wants the TOP shelf. Stand at the dashed ring under the cig wall and HOLD E to climb. Slow, and so is ringing them up.",
-            "                                 Tip: climb as soon as they walk in for a BONUS (+$5, health). Sometimes they want the OTHER one. Yes, again.",
-            "Green visor (scratchers):  wants scratch-offs. Ring them up, then they scratch them AT the counter, blocking the line. Then buy more.",
-            "Blue cap (beer):  needs an ID check first (HOLD E), then ring up. Some dig for their ID forever.",
-            "Hard hat (asker):  follows you and asks questions. Hold E on them to answer -- they interrupt your chores!",
-            "Anyone yelling at the counter will also interrupt you. Interrupts cancel your chore progress, so finish fast."};
-        for (int i = 0; i < f.length; i++) text(g, f[i], 90, y + 56 + i * 20, fSm, Color.WHITE, false);
+        g.setColor(new Color(10, 12, 30, 252)); g.fillRect(0, 0, W, H);
+        Color gold = new Color(255, 230, 70), soft = new Color(200, 205, 230);
+        text(g, helpPage == 0 ? "HOW TO SURVIVE THE NIGHT SHIFT" : "CUSTOMERS & EXTRAS", W / 2.0, 62, fBig, gold, true);
+        text(g, "page " + (helpPage + 1) + " of " + HELP_PAGES + "      " + (scene == Scene.PLAY ? "(game is paused)" : ""), W / 2.0, 92, fSm, soft, true);
+        if (helpPage == 0) {
+            String[][] colL = {
+                {"CONTROLS", ""},
+                {"W A S D / arrows", "walk  (Shift = sprint)"},
+                {"E  (tap)", "grab a box or sack, stock a shelf, hand over a pack"},
+                {"E  (HOLD)", "chores, ring up, climb for the cigs"},
+                {"Q", "put down whatever you're carrying"},
+                {"F", "\"Be right with you!\" calms the line"},
+                {"", "(15s+ cooldown, weaker each night)"},
+                {"1 - 6  / mouse", "add $1 / $5 / $10 / $20 / $50 / $100"},
+                {"BACKSPACE", "clear the change you've counted out"},
+                {"ENTER / SPACE", "hand over the change (must be EXACT)"},
+                {"C", "call a co-worker (see page 2)"},
+                {"H / M / P", "help  /  mute sound  /  pause"},
+                {"", ""},
+                {"THE YELLOW PROMPT", "at the bottom: what E will do right now"},
+                {"THE DASHED RING", "marks the thing you're about to use"},
+            };
+            String[][] colR = {
+                {"KEEPING THE STORE ALIVE", ""},
+                {"STORE HEALTH", "drains all night. Fill it with chores:"},
+                {"   Mop spills", "stand on the blue puddle, hold E"},
+                {"   Soda machine / rug", "hold E when dirty (dirty soda leaks!)"},
+                {"   Stock shelves", "box from the BACK ROOM, tap E at a shelf"},
+                {"   Front-face", "hold E at a messy shelf"},
+                {"THE SAFE", "in the back room:"},
+                {"   DROP CASH", "move extra/big bills in (over $350 = bad)"},
+                {"   BUY CASH", "restock small bills when the drawer runs low"},
+                {"ROBBERY", "drawer over $350 for ~25s brings a robber."},
+                {"", "DROP CASH to stay safe!"},
+                {"TIPS & COMBO", "serve fast (green bar) for tips"},
+                {"TRAFFIC", "bottom-right bar climbs when you do well,"},
+                {"", "and drops when people storm out."},
+            };
+            drawHelpCol(g, colL, 70, 140, 190, 30);
+            drawHelpCol(g, colR, 670, 140, 190, 30);
+        } else {
+            double y = 112;
+            blockHdr(g, 60, y, 1160, 226, new Color(50, 60, 95), 20, 48);   // fixed-height header band, so it can't reach the text below
+            text(g, "CUSTOMER FIELD GUIDE", 90, y + 34, fMid, gold, false);
+            String[] f = {
+                "Top hat (big bills):  pays with $50/$100. Make exact change. Out of small bills? Run to the safe and BUY CASH.",
+                "Red cap (cigarettes):  wants the TOP shelf. Stand at the dashed ring under the cig wall and HOLD E to climb.",
+                "      Climb as soon as they walk in for a BONUS (+$5, health). Sometimes they want the OTHER one. Yes, again.",
+                "Green visor (scratchers):  ring them up, then they scratch at the counter and block the line. Then buy more.",
+                "Blue cap (beer):  needs an ID check first (HOLD E), then ring up. Some dig for their ID forever.",
+                "Hard hat (asker):  follows you and asks questions. Hold E on them to answer. They interrupt your chores!",
+                "Anyone yelling at the counter will also interrupt you. Interrupts cancel your chore progress, so finish fast."};
+            for (int i = 0; i < f.length; i++) text(g, f[i], 90, y + 66 + i * 24, fSm, Color.WHITE, false);
+            String[][] colL = {
+                {"KEEPING YOUR COOL", ""},
+                {"RAGE-O-METER", "Big bills, interruptions and walkouts raise it."},
+                {"", "Chores, happy customers and F cool it."},
+                {"", "At 80%+ for 7 seconds you SNAP: -12 health."},
+                {"VAPE SPOT", "In the back room, hold E for rage -30."},
+                {"", "3 a shift, 45s apart. You walk slowly for a bit."},
+                {"CO-WORKER (C)", "Once a shift, when your rage is over 50%."},
+                {"", "It costs half your tips."},
+                {"", "They do chores only, and rage rises 20% slower."},
+            };
+            String[][] colR = {
+                {"ACROSS THE WEEK", ""},
+                {"EACH NIGHT", "Every night you survive is ~10% harder."},
+                {"THREE STRIKES", "Get fired 3 times in a run and it's over."},
+                {"", "Your best night and score are saved."},
+                {"COFFEE (night 5+)", "At 4:30 AM, make a fresh pot by 5:30."},
+                {"", "Dump the old pot, grab grounds, then brew."},
+                {"", "On time: a bonus and a calmer morning crowd."},
+                {"", "Late or never: a grumpier crowd. Never a firing."},
+            };
+            drawHelpCol(g, colL, 70, 382, 170, 26);
+            drawHelpCol(g, colR, 670, 382, 190, 26);
+        }
+        // footer: page dots and how to turn the page
+        for (int i = 0; i < HELP_PAGES; i++) { g.setColor(i == helpPage ? gold : new Color(90, 95, 120)); g.fillOval((int) (W / 2.0 - 14 + i * 22), 676, 12, 12); }
+        text(g, (helpPage == 0 ? "NEXT PAGE:  RIGHT arrow, D, SPACE or click" : "PREVIOUS PAGE:  LEFT arrow, A, SPACE or click") + "        CLOSE:  H, F1 or ESC", W / 2.0, 710, fSm, soft, true);
     }
 
-    void drawHelpCol(Graphics2D g, String[][] rows, int x, int y) {
+    void drawHelpCol(Graphics2D g, String[][] rows, int x, int y, int keyW, int rowH) {
         for (int i = 0; i < rows.length; i++) {
             if (i == 0) { text(g, rows[i][0], x, y, fMid, new Color(255, 230, 70), false); continue; }
-            text(g, rows[i][0], x, y + i * 25, fSm, new Color(130, 230, 170), false);
-            text(g, rows[i][1], x + 190, y + i * 25, fSm, Color.WHITE, false);
+            text(g, rows[i][0], x, y + i * rowH, fSm, new Color(130, 230, 170), false);
+            text(g, rows[i][1], x + keyW, y + i * rowH, fSm, Color.WHITE, false);
         }
     }
 
@@ -1580,7 +1728,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         for (Rectangle2D.Double w : walls) if (w.width > 400 && w.height == 20 || w.width == 20 || w.height == 10 || w.width == 10) {
             g.setColor(new Color(110, 100, 130)); g.fill(w); g.setColor(OUT); g.draw(w);
         }
-        tag(g, "BACK ROOM", 250, 126);
+        tag(g, "BACK ROOM", 232, 126);
         // door
         g.setColor(new Color(255, 230, 90)); g.fillRoundRect(520, 692, 130, 16, 8, 8);
         text(g, "OPEN 24 HRS", 585, 705, fXs, OUT, true);
@@ -1625,6 +1773,34 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             g.draw(new Ellipse2D.Double(safeP.x - 52 - pul, safeP.y - 46 - pul, 104 + 2 * pul, 92 + 2 * pul));
             tag(g, sa + " HERE", safeP.x, safeP.y - 58);
         }
+        // coffee station (night 5+)
+        if (coffeeNight()) {
+            block(g, coffeeR.x, coffeeR.y, coffeeR.width, coffeeR.height, new Color(150, 110, 70), 8);
+            block(g, 868, 54, 46, 40, new Color(70, 75, 90), 6);                                  // the machine
+            double lvl = coffeeStage == CF_STALE ? 0.6 : coffeeStage == CF_BREW ? brewT / BREW_TIME : coffeeStage == CF_READY ? 1 : 0;
+            g.setColor(new Color(240, 245, 250, 200)); g.fillRoundRect(930, 56, 34, 40, 8, 8);   // the glass pot
+            if (lvl > 0) { g.setColor(coffeeStage == CF_STALE ? new Color(95, 80, 55) : new Color(70, 40, 22)); int hh = (int) (36 * lvl); g.fillRoundRect(932, 94 - hh, 30, hh, 6, 6); }
+            g.setColor(OUT); g.setStroke(new BasicStroke(2)); g.drawRoundRect(930, 56, 34, 40, 8, 8);
+            g.setColor(coffeeStage == CF_READY ? new Color(90, 230, 120) : coffeeStage == CF_BREW ? new Color(255, 200, 60) : prog() * 480 >= COFFEE_START ? new Color(255, 90, 80) : new Color(90, 95, 110));
+            g.fillOval(886, 60, 10, 10);
+            if (coffeeStage == CF_READY || coffeeStage == CF_BREW) {
+                g.setColor(new Color(255, 255, 255, 110));
+                for (int i = 0; i < 3; i++) g.fillOval(940 + i * 7 - 4, (int) (46 - 8 * ((t * 1.3 + i * 0.33) % 1.0)), 9, 9);
+            }
+            String cl = prog() * 480 < COFFEE_START ? "COFFEE" : coffeeStage == CF_STALE ? "COFFEE: STALE" : coffeeStage == CF_EMPTY ? "COFFEE: needs grounds" : coffeeStage == CF_BREW ? "BREWING " + (int) (100 * brewT / BREW_TIME) + "%" : "COFFEE READY";
+            tag(g, cl, coffeeR.getCenterX(), coffeeR.getMaxY() + 22);
+            // grounds sack in the back room
+            block(g, groundsP.x - 12, groundsP.y - 14, 24, 28, new Color(120, 80, 50), 5);
+            g.setColor(new Color(235, 220, 190)); g.fillRoundRect((int) groundsP.x - 7, (int) groundsP.y - 5, 14, 12, 4, 4);
+            g.setColor(new Color(120, 80, 50)); g.fillOval((int) groundsP.x - 3, (int) groundsP.y - 3, 6, 8);
+        }
+        // vape spot
+        block(g, vapeP.x - 24, vapeP.y + 2, 48, 22, new Color(90, 100, 130), 6);
+        g.setColor(vapeCd <= 0 && vapeUses < VAPE_MAX ? new Color(80, 220, 210) : new Color(120, 125, 140));
+        g.fillRoundRect((int) vapeP.x - 5, (int) vapeP.y - 16, 10, 24, 5, 5);
+        g.setColor(OUT); g.setStroke(new BasicStroke(2)); g.drawRoundRect((int) vapeP.x - 5, (int) vapeP.y - 16, 10, 24, 5, 5);
+        g.setColor(vapeCd <= 0 && vapeUses < VAPE_MAX ? new Color(255, 90, 80) : new Color(70, 70, 80)); g.fillOval((int) vapeP.x - 3, (int) vapeP.y - 15, 6, 6);
+        tag(g, "VAPE", vapeP.x, vapeP.y + 38);
         // box pile
         for (int i = 0; i < 3; i++) block(g, boxPile.x - 30 + i * 22, boxPile.y - 20 + (i % 2) * 14, 44, 36, new Color(200, 160, 100), 4);
         tag(g, "STOCK BOXES", boxPile.x, boxPile.y + 46);
@@ -1720,6 +1896,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         // red employee vest
         g.setColor(new Color(255, 255, 255, 200)); g.fillRect((int) px - 6, (int) (py - 36), 12, 3);
         if (carry == C_BOX) block(g, px - 18, py - 58, 36, 28, new Color(200, 160, 100), 4);
+        if (carry == C_GROUNDS) { block(g, px - 12, py - 62, 24, 30, new Color(120, 80, 50), 4); text(g, "COFFEE", px, py - 68, fXs, Color.WHITE, true); }
         if (carry == C_PACK) { block(g, px - 9, py - 62, 18, 24, new Color(235, 60, 60), 3); text(g, "CIGS", px, py - 70, fXs, Color.WHITE, true); }
         if (beatT > 0) {
             AffineTransform old = g.getTransform();
@@ -1793,7 +1970,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         meter(g, 18, 40, 320, 24, rg, rc, "RAGE  " + rw);
         int dv = drawerValue();
         text(g, "DRAWER $" + dv, 20, 91, fSm, dv > 350 ? new Color(255, 120, 110) : Color.WHITE, false);
-        String cs = carry == C_BOX ? "carrying BOX (Q: drop)" : carry == C_PACK ? "carrying CIGS - take to register" : "";
+        String cs = carry == C_BOX ? "carrying BOX (Q: drop)" : carry == C_PACK ? "carrying CIGS - take to register" : carry == C_GROUNDS ? "carrying GROUNDS - take to the coffee pot" : "";
         boolean nearCash = atRegister() || dist(px, py, safeP.x, safeP.y) < 130;
         if (!cs.isEmpty()) text(g, cs, 150, 91, fSm, new Color(130, 230, 170), false);
         else if (nearCash) text(g, "1s:" + drawer[0] + "  5s:" + drawer[1] + "  10s:" + drawer[2] + "  20s:" + drawer[3] + "  big:$" + bigPile(), 150, 91, fXs, new Color(200, 210, 230), false);
@@ -1956,6 +2133,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         b.add(new Object[]{"Combo x5 or better", 150, bestCombo >= 5});
         b.add(new Object[]{"Spotless store (health 80+)", 200, health >= 80});
         b.add(new Object[]{"Flew solo (no co-worker)", 250, !cwUsed});
+        if (coffeeNight()) b.add(new Object[]{"Fresh coffee by 5:30 AM", COFFEE_BONUS, coffeeOnTime});
         return b;
     }
     int bonusTotal() { int t = 0; for (Object[] r : bonuses()) if ((Boolean) r[2]) t += (Integer) r[1]; return t; }
@@ -1972,15 +2150,15 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         blockHdr(g, W / 2.0 - 280, 30, 560, 660, new Color(50, 60, 95), 28, 120);
         text(g, win ? "SHIFT OVER! 6:00 AM" : runOver ? "YOU'RE FIRED. FOR GOOD." : "YOU'RE FIRED", W / 2.0, 92, fBig, win ? new Color(120, 240, 150) : new Color(255, 100, 100), true);
         text(g, win ? "You survived night " + night + ". The next one will be harder." : runOver ? "Strike " + strikes + " of " + MAX_STRIKES + ". The manager has had ENOUGH." : "The store fell apart. Manager is NOT happy.  Strike " + strikes + " of " + MAX_STRIKES + ".", W / 2.0, 128, fSm, Color.WHITE, true);
-        String[] rows = {"Tips earned: $" + tips, "Happy customers: " + happy, "Angry walkouts: " + angryCt,
+        String[] rows = {"Sales: $" + sales, "Tips earned: $" + tips, "Happy customers: " + happy, "Angry walkouts: " + angryCt,
                 "Best combo: x" + bestCombo, "Customers served: " + served, "Robbed: " + robberies + "x  ($" + robbedTotal + " lost)"};
-        for (int i = 0; i < rows.length; i++) text(g, rows[i], W / 2.0, 176 + i * 26, fSm, Color.WHITE, true);
+        for (int i = 0; i < rows.length; i++) text(g, rows[i], W / 2.0, 172 + i * 24, fSm, i == 0 ? new Color(120, 240, 150) : Color.WHITE, true);
         // bonuses
         text(g, "BONUSES", W / 2.0, 354, fMid, new Color(255, 225, 60), true);
         if (win) {
             List<Object[]> bl = bonuses();
             for (int i = 0; i < bl.size(); i++) {
-                Object[] r = bl.get(i); boolean got = (Boolean) r[2]; double yy = 384 + i * 26;
+                Object[] r = bl.get(i); boolean got = (Boolean) r[2]; double yy = 384 + i * (bl.size() > 6 ? 22 : 26);
                 Color c = got ? new Color(120, 240, 150) : new Color(150, 155, 180);
                 text(g, (got ? "+ " : "- ") + r[0], W / 2.0 - 230, yy, fSm, c, false);
                 text(g, got ? "+" + r[1] : "0", W / 2.0 + 190, yy, fSm, c, false);
@@ -2040,6 +2218,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             BANK.put("thud", gen(0.2, t -> 0.8 * sine(95 - 150 * t, t) * env(t, 0.07)));
             BANK.put("clink", gen(0.3, t -> 0.35 * (sine(2400, t) + sine(3300, t) * 0.6) * env(t, 0.05)
                     + (t > 0.07 ? 0.3 * sine(2900, t) * env(t - 0.07, 0.05) : 0)));
+            BANK.put("puff", gen(0.55, t -> Math.sin(Math.PI * t / 0.55) * (0.45 * (R.nextDouble() - 0.5) + 0.2 * sine(140 + 90 * t, t))));
             BANK.put("swish", gen(0.16, t -> (R.nextDouble() - 0.5) * 0.55 * Math.sin(Math.PI * t / 0.16)));
             BANK.put("creak", gen(0.16, t -> 0.25 * saw(210 + 160 * Math.sin(t * 40), t) * Math.sin(Math.PI * t / 0.16)));
             BANK.put("win", gen(1.1, t -> {

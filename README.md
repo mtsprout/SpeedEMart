@@ -89,7 +89,7 @@ release with the bundle attached.
 | Backspace | Clear the change |
 | Enter / Space | Hand over the change |
 | C | Call in a co-worker (once per shift, only when rage is over 50%) |
-| H, F1 or P | Help / pause |
+| H, F1 or P | Help (two pages: arrows, A/D, Space or a click turn the page) / pause |
 | M | Mute |
 
 Enter or Space starts a night from the title screen.
@@ -97,6 +97,19 @@ Enter or Space starts a night from the title screen.
 **Three strikes:** if your health hits zero you're fired and retry the same night, but that
 costs a strike. Get fired three times in one run and the run is over, back to night 1.
 Your strikes show in the top-left of the screen.
+
+**Vape spot:** a calm-down station in the back room. Hold E for 1.5 seconds to take a hit
+and knock 30 off your rage. You get 3 hits per shift, with a 45 second cooldown, a few
+seconds of buzzed slow-walking, and the line watching you do it.
+
+**Coffee pot (night 5 and up):** at 4:30 AM the morning crew wants fresh coffee by 5:30. Dump the
+old pot (hold E at the machine, top right), grab the grounds sack from the back room, carry it to
+the machine and brew (30 seconds). A pot ready by 5:30 earns a +200 shift bonus and calms the
+morning crowd (rage gains drop 15%). No pot makes them grumpier (rage gains rise 20%). A late pot
+only lifts the penalty. It never gets you fired.
+
+**Playtesting a later night:** `NIGHT=5 ./run.sh` starts a run on night 5. Runs started this way
+don't update your saved best records.
 
 Your best night and best score are saved between sessions in `best.properties`, in
 `~/Library/Application Support/SpeedEMart` (Mac), `%APPDATA%\SpeedEMart` (Windows) or
