@@ -89,6 +89,7 @@ release with the bundle attached.
 | Backspace | Clear the change |
 | Enter / Space | Hand over the change |
 | C | Call in a co-worker (once per shift, only when rage is over 50%) |
+| X | Call the manager (night 4 and up, once per shift, costs a favor) |
 | H, F1 or P | Help (two pages: arrows, A/D, Space or a click turn the page) / pause |
 | M | Mute |
 
@@ -97,6 +98,19 @@ Enter or Space starts a night from the title screen.
 **Three strikes:** if your health hits zero you're fired and retry the same night, but that
 costs a strike. Get fired three times in one run and the run is over, back to night 1.
 Your strikes show in the top-left of the screen.
+
+**Favors and the manager:** every night you clear banks a favor, and a night with no walkouts
+banks two (keep up to 3; they show top-center). From night 4 on, press X when a line has built up
+and the manager steps in: the whole line leaves without any walkout penalties, you get +25
+health and -30 rage. It's once per shift and costs a favor. Favors survive getting fired (a
+strike), but a finished run resets them.
+
+**Norm:** from night 2 on, when your rage is high and your health is low, there's a chance the
+next person through the door is Norm, the regular. Everybody yells "HEY NORM!", health goes up
+by 25, rage drops by 40 and the line cheers up. For the next 45 seconds everyone basks in the
+glow: customers' patience stops draining, rage builds at 30% speed and health drains at half
+speed. He chats at the end of the counter, tips $2 and leaves. He shows up at most once a shift and never joins the line. The game doesn't mention him,
+so don't count on him.
 
 **Vape spot:** a calm-down station in the back room. Hold E for 1.5 seconds to take a hit
 and knock 30 off your rage. You get 3 hits per shift, with a 45 second cooldown, a few
@@ -108,7 +122,9 @@ ways to claw back health quickly:
 - **Roller dog:** a hot dog roller along the left wall. Hold E for 2 seconds to
   eat one and get +15 health. You get 2 per shift, 60 seconds apart, and about one in five
   is questionable (half the health, and you walk slowly for a few seconds).
-- **Line cleared:** serve a line of 3 or more customers with no walkouts and you get +8 health.
+- **Line cleared:** serve a line of 3 or more customers with no walkouts and you get $3 in
+  tips (plus $1 per extra customer), +8 health and a bit of rage relief. If your health is already
+  full, the leftover health turns into even more rage relief, so the bonus is never wasted.
 
 **Coffee pot (night 5 and up):** at 4:30 AM the morning crew wants fresh coffee by 5:30. Dump the
 old pot (hold E at the machine, top right), grab the grounds sack from the back room, carry it to

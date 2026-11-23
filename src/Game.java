@@ -49,13 +49,20 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     };
 
     enum Scene { TITLE, PLAY, OVER, WIN }
+    // Norm, the regular: a deus ex machina. When you're in trouble (rage high, health low), the next customer through the door
+    // may be Norm. Everyone cheers, the store feels better. At most once per shift, from night 2.
+    static final int NORM_PCT = 15, NORM_NIGHT = 2;
+    static final double NORM_RAGE = 60, NORM_HEALTH = 45, NORM_HEAL = 25, NORM_CALM = 40;
+    // ...and for NORM_GLOW seconds afterwards everyone basks in it: patience stops draining, rage gains drop to 30%, health drains at half speed
+    static final double NORM_GLOW = 45, NORM_GLOW_RAGE = 0.3;
+    boolean normSeen; double glowT;
     static final int GEN_PCT = 15;   // % chance that a spare change guy is followed by a generous guy
     static final double COINS_SECS_PER_DOLLAR = 1.1;   // how long the spare change guy takes to count each dollar of pennies
     static final double COINS_HELP = 1.5;              // extra counting speed while you hold E at the register to help
     static final int LOW_CIG_PCT = 50;   // % of cigarette customers who want a pack from behind the counter (no climb)
-    static final int T_NORMAL = 0, T_BIG = 1, T_CIG = 2, T_SCRATCH = 3, T_ASK = 4, T_BEER = 5, T_ROB = 6, T_COINS = 8, T_GEN = 9;
+    static final int T_NORMAL = 0, T_BIG = 1, T_CIG = 2, T_SCRATCH = 3, T_ASK = 4, T_BEER = 5, T_ROB = 6, T_COINS = 8, T_GEN = 9, T_NORM = 10;
     static final int N_RING = 0, N_PACK = 1, N_CARD = 2, N_PAY = 3, N_SCRATCH = 4, N_ASK = 5, N_ID = 6;
-    static final int S_SHOP = 0, S_BROWSE = 1, S_QUEUE = 2, S_LEAVE = 3, S_ASKGO = 4, S_ASK = 5, S_ROBGO = 6, S_ROBTAKE = 7;
+    static final int S_SHOP = 0, S_BROWSE = 1, S_QUEUE = 2, S_LEAVE = 3, S_ASKGO = 4, S_ASK = 5, S_ROBGO = 6, S_ROBTAKE = 7, S_NORM = 8;
     static final int C_NONE = 0, C_BOX = 2, C_PACK = 3, C_GROUNDS = 4;
 
     // ---------- fonts / palette ----------
@@ -116,12 +123,17 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     // full-screen mop-beating cinematic
     boolean cineOn; double cineT, cineEnd, hitFlash, hitX, hitY, focusX, focusY; String hitWord = "WHACK!", cineCaption = "";
     double beatT = 0, beatSwing = 0; int beatHits = 0; Customer beatTarget;
+    static final int ROB_MIN = 350;   // a robber only bothers if the drawer holds more than this
     static final double ROB_LIMIT = 25.0;   // seconds over $350 before a robber shows up (night 1)
     int night = 1;                           // each shift survived makes the next one harder
     /** Difficulty multiplier: +10% per night survived. */
     double nm() { return 1 + 0.10 * (night - 1); }
     double robLimit() { return Math.max(12, ROB_LIMIT - 2 * (night - 1)); }
     int runScore, lastShiftScore;   // running total over the shifts you survived, and the shift that just ended
+    // favors: banked by clearing nights, spent on calling the manager (from night 4 on) to clear the line in an emergency
+    static final int MAX_FAVORS = 3, MGR_AFTER = 3;          // stash cap; the manager only comes in after this night
+    static final double MGR_HEAL = 25, MGR_CALM = 30;
+    int favors, favorsEarned; boolean mgrUsed;
     static final int MAX_STRIKES = 3;   // times you can be fired in one run; the last one ends the run
     int strikes, bestNight, bestScore;   // strikes this run; best night survived and best run score this session
     boolean runOver;                     // true once the final strike has landed
@@ -160,7 +172,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     }
     void startNext() {
         if (scene == Scene.OVER && runOver) { scene = Scene.TITLE; return; }   // run is over: back to the title, then start a new one
-        if (scene == Scene.TITLE) { night = Math.max(1, Integer.getInteger("speedemart.night", 1)); runScore = 0; strikes = 0; runOver = false; }
+        if (scene == Scene.TITLE) { night = Math.max(1, Integer.getInteger("speedemart.night", 1)); runScore = 0; strikes = 0; runOver = false; favors = 0; }
         else if (scene == Scene.WIN) night++;     // survived: next night is harder. Fired (strikes left): retry the same night.
         newGame();
     }
@@ -189,7 +201,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     // roller dog along the left wall: a rationed health restorer
     static final int ROLLER_MAX = 2;
     static final double ROLLER_CD = 60, ROLLER_HEAL = 15, LINE_HEAL = 8;   // uses per shift, cooldown (s), health (before night scaling), line-cleared bonus
-    static final int LINE_MIN = 3;                                          // line size that counts for the bonus
+    static final int LINE_MIN = 3, LINE_TIP = 3;                            // line size that counts for the bonus; base tip in $ (+$1 per extra customer)
+    static final double LINE_CALM = 5;                                      // rage relief on top, plus 1.5x any health that would overflow past 100                                          // line size that counts for the bonus
     final Point2D.Double rollerP = new Point2D.Double(90, 335);
     int rollerUses, lineBest, lastAngry; double rollerCd; double[] rollerPr = new double[1]; boolean lineClean = true;
     // coffee pot (from night 5): at 4:30 AM the morning crew wants a FRESH pot by 5:30. Dump the old one, fetch grounds from the back room, brew.
@@ -298,7 +311,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         robT = 0; robCd = 40; robbedTotal = 0; robberies = 0;
         walls.remove(coffeeR); if (coffeeNight()) walls.add(coffeeR);
         coffeeStage = coffeeNight() ? CF_STALE : 0; brewT = 0; coffeeOnTime = coffeeAnnounced = coffeeWarned = coffeeVerdict = false; dumpPr[0] = brewPr[0] = 0;
-        cwConfirm = false; safeDone = false; rollerUses = 0; rollerCd = 0; rollerPr[0] = 0; lineBest = 0; lineClean = true; lastAngry = 0; vapeUses = 0; vapeCd = 0; buzzT = 0; vapePr[0] = 0; puffs.clear(); snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
+        cwConfirm = false; mgrUsed = false; normSeen = false; glowT = 0; safeDone = false; rollerUses = 0; rollerCd = 0; rollerPr[0] = 0; lineBest = 0; lineClean = true; lastAngry = 0; vapeUses = 0; vapeCd = 0; buzzT = 0; vapePr[0] = 0; puffs.clear(); snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
         sodaLeakT = 12; sodaLeakWarned = false; cineOn = false; beatT = 0; beatTarget = null; hitFlash = 0; packEarly = false;
         rage = 0; snapT = 0; snapWarned = false; trickleT = 22; burstLeft = 0; burstForce = -1; burstT = 0; nSpawned = 0; genNext = false; phaseIdx = -1; phaseName = "";
         Arrays.fill(evFired, false); Arrays.fill(evWarned, false);
@@ -329,13 +342,13 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             dt *= 0.3;                         // the rest of the world drops into slow motion
         }
         t += dt;
-        if (t >= SHIFT) { scene = Scene.WIN; lastShiftScore = shiftScore(true); runScore += lastShiftScore; if (!TEST_START) { bestNight = Math.max(bestNight, night); bestScore = Math.max(bestScore, runScore); saveBest(); } Snd.play("win"); return; }
+        if (t >= SHIFT) { scene = Scene.WIN; favorsEarned = 1 + (angryCt == 0 ? 1 : 0); favors = Math.min(MAX_FAVORS, favors + favorsEarned); lastShiftScore = shiftScore(true); runScore += lastShiftScore; if (!TEST_START) { bestNight = Math.max(bestNight, night); bestScore = Math.max(bestScore, runScore); saveBest(); } Snd.play("win"); return; }
         stun -= dt; shake -= dt; toastT -= dt;
         movePlayer(dt);
         beatLogic(rdt);
         handleTasks(dt);
         coworkerLogic(dt);
-        vapeLogic(dt); rollerLogic(dt);
+        vapeLogic(dt); rollerLogic(dt); glowT = Math.max(0, glowT - dt);
         coffeeLogic(dt);
         reassureCd -= dt;
         if (fPressed) reassure();
@@ -665,13 +678,42 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         lineBest = Math.max(lineBest, queue.size());
         if (queue.isEmpty() && lineBest > 0) {
             if (lineBest >= LINE_MIN && lineClean) {
-                double before = health; heal(LINE_HEAL); int gained = (int) Math.round(health - before);
-                ft(px, py - 120, "LINE CLEARED! +" + gained + " health", new Color(120, 235, 140));
-                toast("Line cleared with no walkouts: health +" + gained + ".");
+                // Always pays: a few dollars of tips (which count toward the score), health, and any health that
+                // would overflow past 100% turns into extra rage relief, so the bonus is never wasted.
+                int cash = LINE_TIP + (lineBest - LINE_MIN);
+                double want = LINE_HEAL * healMult(), before = health, rBefore = rage;
+                tips += cash; heal(LINE_HEAL);
+                double overflow = Math.max(0, want - (health - before));
+                calmRage(LINE_CALM + overflow * 1.5);
+                int gained = (int) Math.round(health - before), calmed = (int) Math.round(rBefore - rage);
+                StringBuilder sb = new StringBuilder("+$" + cash);
+                if (gained > 0) sb.append(", health +").append(gained);
+                if (calmed > 0) sb.append(", rage -").append(calmed);
+                ft(px, py - 120, "LINE CLEARED! " + sb, new Color(120, 235, 140));
+                toast("Line cleared with no walkouts: " + sb.toString().substring(1) + ".");
                 Snd.play("bell");
             }
             lineBest = 0; lineClean = true;
         }
+    }
+
+    /** Emergency button: spends a banked favor. The manager clears the line (no walkouts, no penalties), and you get a breather. */
+    void callManager() {
+        if (scene != Scene.PLAY || help) return;
+        if (night <= MGR_AFTER) { toast("The manager doesn't come in until night " + (MGR_AFTER + 1) + ". Bank those favors."); return; }
+        if (favors <= 0) { toast("No favors banked. Clear a night to earn one."); return; }
+        if (mgrUsed) { toast("The manager already stepped in this shift."); return; }
+        if (queue.isEmpty()) { toast("There's no line to clear."); return; }
+        favors--; mgrUsed = true;
+        for (Customer c : new ArrayList<>(queue)) {
+            queue.remove(c); c.atSlot = false; c.state = S_LEAVE; c.path.clear();
+            say(c, new String[]{"Oh. Okay, thanks.", "Fine. The manager's got me.", "Finally, someone competent."}[rnd.nextInt(3)], 2.5);
+        }
+        clearGiven(); lineBest = 0; lineClean = true;
+        health = Math.min(100, health + MGR_HEAL); calmRage(MGR_CALM);
+        ft(px, py - 100, "THE MANAGER STEPS IN", new Color(255, 225, 60));
+        toast("The manager takes the line. Health +" + (int) MGR_HEAL + ", rage -" + (int) MGR_CALM + ". Favors left: " + favors + ".");
+        Snd.play("bell"); shake = 0.3;
     }
 
     void vapeHit() {
@@ -914,6 +956,17 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         Snd.play("alarm"); Snd.play("bell"); shake = 0.4;
     }
 
+    /** The drawer is down to its float, so there's nothing worth taking: dropping the cash in time really does stop the robbery. */
+    void robberFoiled(Customer c) {
+        robCd = 60; robT = 0; robWarn1 = false;
+        calmRage(10); bumpRush(0.03);
+        say(c, "That's all?! Forget it!", 3);
+        c.state = S_LEAVE; c.path.clear();
+        ft(px, py - 90, "ROBBERY AVERTED", new Color(120, 240, 150));
+        toast("The drawer was nearly empty, so the robber gave up. Good call dropping that cash.");
+        Snd.play("kaching");
+    }
+
     void robbed(Customer c) {
         int amt = drawerValue();
         drawer = new int[4]; Arrays.fill(big, 0);
@@ -1028,6 +1081,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             Color cb = coffeeStage == CF_READY ? new Color(130, 230, 170) : late ? new Color(240, 90, 80) : new Color(255, 215, 90);
             hintBox(g, ch + (coffeeStage == CF_READY ? "" : late ? "  (late!)" : "  (by 5:30)"), 10, H - 165, cb);
         }
+        if (glowT > 0) hintBox(g, "Norm's glow: " + (int) Math.ceil(glowT) + "s of peace", 10, H - 255, new Color(255, 200, 110));
+        if (night > MGR_AFTER && favors > 0 && !mgrUsed) {
+            if (!queue.isEmpty()) hintBox(g, "[X]  call the manager  (clears the line, " + favors + " favor" + (favors == 1 ? "" : "s") + ")", 10, H - 210, new Color(255, 215, 80));
+            else hintBox(g, "Manager (X): ready when there's a line", 10, H - 210, new Color(120, 120, 140));
+        }
         if (cwOn) hintBox(g, cwLeaving ? "Co-worker is leaving" : "Co-worker: " + (int) Math.ceil(cwLeft) + " min left", 10, H - 120, new Color(150, 200, 255));
         else if (!cwUsed) {
             if (rage > 50) hintBox(g, "[C]  call co-worker  (-$" + tips / 2 + " tips, " + cwMinutes() + " min)", 10, H - 120, new Color(130, 230, 170));
@@ -1043,6 +1101,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     }
     double rageMult() {
         double m = cwOn ? CW_RAGE_MULT : 1.0;
+        if (glowT > 0) m *= NORM_GLOW_RAGE;
         if (coffeeNight() && prog() * 480 >= COFFEE_DEADLINE) m *= coffeeOnTime ? COFFEE_HAPPY : coffeeStage == CF_READY ? 1.0 : COFFEE_ANGRY;
         return m;
     }
@@ -1156,7 +1215,23 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     double effRush() { return Math.min(1, rush * 0.85 + prog() * 0.15); }
     void bumpRush(double d) { rush = Math.max(0, Math.min(1, rush + d)); }
 
+    void spawnNorm() {
+        normSeen = true;
+        Customer c = new Customer();
+        c.type = T_NORM; c.name = "NORM"; c.shirt = new Color(150, 70, 60); c.skin = SKINS[1];
+        c.x = DOOR_X; c.y = DOOR_Y; c.state = S_NORM; c.browse = 7; c.patMax = 99;
+        say(c, "Evening, everybody.", 3);
+        customers.add(c);
+        for (Customer o : customers) if (o != c) say(o, "HEY NORM!", 3);
+        for (Customer q : queue) { q.pat = Math.min(1, q.pat + 0.25); q.calm = Math.max(q.calm, 5); }
+        health = Math.min(100, health + NORM_HEAL); calmRage(NORM_CALM); glowT = NORM_GLOW;
+        ft(px, py - 100, "HEY NORM!", new Color(255, 225, 60));
+        toast("It's NORM! Health +" + (int) NORM_HEAL + ", rage -" + (int) NORM_CALM + ", and everybody's basking in it for " + (int) NORM_GLOW + " seconds.");
+        Snd.play("bell"); Snd.play("kaching");
+    }
+
     void spawn(int force) {
+        if (force < 0 && night >= NORM_NIGHT && !normSeen && rage >= NORM_RAGE && health <= NORM_HEALTH && rnd.nextInt(100) < NORM_PCT) { spawnNorm(); return; }
         Customer c = new Customer();
         c.name = NAMES[rnd.nextInt(NAMES.length)];
         c.shirt = SHIRTS[rnd.nextInt(SHIRTS.length)];
@@ -1353,6 +1428,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                     }
                 } else if (c.calm > 0) {
                     c.calm -= dt;
+                } else if (glowT > 0) {
+                    // basking in Norm's glow: nobody's patience drains
                 } else if (idx == 0 && c.need == N_PAY && c.atSlot && (panelOpen() || !canMake(c.bill - c.total - givenSum()))) {
                     c.paused = true;   // making change (or stuck without small bills): their clock waits
                 } else if (arrived || idx > 0) {
@@ -1390,7 +1467,15 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 break;
             case S_ROBTAKE:
                 c.browse -= dt; c.sayT = 1;
-                if (c.browse <= 0) robbed(c);
+                if (heldTask != null && heldTask.id.equals("drop")) c.browse = Math.max(c.browse, 0.2);   // you're mid-drop: he waits for you to finish
+                if (c.browse <= 0) { if (drawerValue() > ROB_MIN) robbed(c); else robberFoiled(c); }
+                break;
+            case S_NORM:   // walks up to the end of the counter for a chat, then heads out. He never joins the line.
+                if (walk(c, 735, 305, dt, 105)) {
+                    c.browse -= dt;
+                    if (c.sayT <= 0 && c.browse > 1.5) say(c, new String[]{"Slow night, huh?", "Quite a crowd tonight.", "Keep up the good work, kid.", "Nobody pours a beer like you."}[rnd.nextInt(4)], 2.5);
+                    if (c.browse <= 0) { tips += 2; say(c, "See ya tomorrow!", 2.5); ft(c.x, c.y - 80, "+$2 TIP", new Color(255, 225, 60)); c.state = S_LEAVE; c.path.clear(); }
+                }
                 break;
             case S_LEAVE:
                 if (walk(c, 585, DOOR_Y, dt, c.type == T_ROB ? 170 : sp)) c.gone = true;
@@ -1443,6 +1528,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         for (Shelf s : shelves) { if (s.stock == 0) d += 0.12; else if (s.stock <= 3) d += 0.05; }   // a store in disarray wears you down
         if (drawerValue() > 400) d += 0.45;
         if (rage > 70) d += 0.2;
+        if (glowT > 0) d *= 0.5;
         d *= night > 1 ? 1 + 0.08 * (night - 1) : lerp(0.5, 1.0, t / 180.0);   // night 1: gentle first 3 minutes; later nights drain faster
         health = Math.max(0, Math.min(100, health - d * dt));
         if (health <= 0) { scene = Scene.OVER; strikes++; runOver = strikes >= MAX_STRIKES; lastShiftScore = shiftScore(false); Snd.play("lose"); }   // a shift you got fired in does not count toward the running total
@@ -1487,6 +1573,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             case KeyEvent.VK_Q: qPressed = true; break;
             case KeyEvent.VK_F: fPressed = true; break;
             case KeyEvent.VK_C: requestCoworker(); break;
+            case KeyEvent.VK_X: callManager(); break;
             case KeyEvent.VK_1: addGiven(0); break;
             case KeyEvent.VK_2: addGiven(1); break;
             case KeyEvent.VK_3: addGiven(2); break;
@@ -1583,9 +1670,10 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         }
         for (FT f : fts) {
             g.setFont(fMid); int a = (int) Math.max(0, Math.min(255, f.life * 255));
-            g.setColor(new Color(0, 0, 0, a / 2)); g.drawString(f.s, (int) f.x - g.getFontMetrics().stringWidth(f.s) / 2 + 2, (int) f.y + 2);
+            int fw = g.getFontMetrics().stringWidth(f.s), fx = (int) Math.max(8 + fw / 2.0, Math.min(W - 8 - fw / 2.0, f.x));   // keep it on screen
+            g.setColor(new Color(0, 0, 0, a / 2)); g.drawString(f.s, fx - fw / 2 + 2, (int) f.y + 2);
             g.setColor(new Color(f.c.getRed(), f.c.getGreen(), f.c.getBlue(), a));
-            g.drawString(f.s, (int) f.x - g.getFontMetrics().stringWidth(f.s) / 2, (int) f.y);
+            g.drawString(f.s, fx - fw / 2, (int) f.y);
         }
         g.setTransform(at);
         boolean cine = cineOn && scene == Scene.PLAY;
@@ -1700,8 +1788,6 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 {"ROBBERY", "drawer over $350 for ~25s brings a robber."},
                 {"", "DROP CASH to stay safe!"},
                 {"TIPS & COMBO", "serve fast (green bar) for tips"},
-                {"TRAFFIC", "bottom-right bar climbs when you do well,"},
-                {"", "and drops when people storm out."},
             };
             drawHelpCol(g, colL, 70, 140, 190, 30);
             drawHelpCol(g, colR, 670, 140, 190, 30);
@@ -1730,6 +1816,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 {"CO-WORKER (C)", "Once a shift, when your rage is over 50%."},
                 {"", "It costs half your tips."},
                 {"", "They do chores only, and rage rises 20% slower."},
+                {"MANAGER (X)", "From night 4: clears the line, health +25, rage -30."},
+                {"", "Once a shift. Costs a favor: clear a night to earn one."},
             };
             String[][] colR = {
                 {"ACROSS THE WEEK", ""},
@@ -1742,7 +1830,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 {"", "Late or never: a grumpier crowd. Never a firing."},
                 {"ROLLER DOG", "Left wall, below the back room: health +15."},
                 {"", "2 a shift, 60s apart. Rarely a bad one."},
-                {"LINE CLEARED", "Serve a line of 3+ with no walkouts: health +8."},
+                {"LINE CLEARED", "Line of 3+, no walkouts: tips, health and calm."},
             };
             drawHelpCol(g, colL, 70, 402, 170, 24);
             drawHelpCol(g, colR, 670, 402, 190, 24);
@@ -1963,11 +2051,13 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (hat == 7) { g.setColor(new Color(255, 214, 160)); g.fillRoundRect((int) x - 9, hy + 7, 18, 9, 4, 4); g.setColor(OUT); g.fillOval((int) (x - 6 + dir * 2), hy + 9, 4, 5); g.fillOval((int) (x + 2 + dir * 2), hy + 9, 4, 5); g.setStroke(new BasicStroke(2.5f)); g.drawLine((int) x - 9, hy + 6, (int) x - 3, hy + 8); g.drawLine((int) x + 9, hy + 6, (int) x + 3, hy + 8); }
         if (hat == 8) { g.setColor(new Color(200, 170, 110)); g.fillArc((int) x - 13, hy - 8, 26, 20, 0, 180); g.fillRoundRect((int) x - 18, hy + 1, 36, 5, 4, 4); g.setColor(OUT); g.drawRoundRect((int) x - 18, hy + 1, 36, 5, 4, 4); g.setColor(new Color(240, 200, 70)); g.fillOval((int) x - 3, hy - 3, 6, 6); }   // bucket hat with a coin
         if (hat == 9) { g.setColor(new Color(40, 110, 70)); g.fillRoundRect((int) x - 11, hy - 14, 22, 16, 4, 4); g.fillRoundRect((int) x - 17, hy - 2, 34, 5, 3, 3); g.setColor(new Color(245, 200, 50)); g.fillRect((int) x - 11, hy - 5, 22, 4); g.setColor(OUT); g.drawRoundRect((int) x - 17, hy - 2, 34, 5, 3, 3); }   // green top hat, gold band
+        if (hat == 10) { g.setColor(new Color(110, 85, 60)); g.fillArc((int) x - 14, hy - 8, 28, 22, 0, 180); g.fillRoundRect((int) (x + (dir > 0 ? 4 : -20)), hy + 1, 16, 4, 2, 2);   // flat cap
+                         g.setColor(new Color(60, 40, 25)); g.fillRoundRect((int) x - 8, hy + 15, 16, 4, 3, 3); }   // and a mustache
         if (hat == 5) { g.setColor(new Color(255, 80, 80)); g.fillRoundRect((int) x - 12, hy - 6, 24, 9, 6, 6); } // staff cap
     }
 
     void drawCustomer(Graphics2D g, Customer c) {
-        int hat = c.type == T_BIG ? 1 : c.type == T_CIG ? 2 : c.type == T_SCRATCH ? 3 : c.type == T_ASK ? 4 : c.type == T_BEER ? 6 : c.type == T_ROB ? 7 : c.type == T_COINS ? 8 : c.type == T_GEN ? 9 : 0;
+        int hat = c.type == T_BIG ? 1 : c.type == T_CIG ? 2 : c.type == T_SCRATCH ? 3 : c.type == T_ASK ? 4 : c.type == T_BEER ? 6 : c.type == T_ROB ? 7 : c.type == T_COINS ? 8 : c.type == T_GEN ? 9 : c.type == T_NORM ? 10 : 0;
         int mood = c.angry || c.pat < 0.35 ? 2 : c.pat < 0.7 ? 0 : 1;
         person(g, c.x, c.y, c.shirt, c.skin, c.bob, mood, hat, c.dir, false);
         tag(g, c.name, c.x, c.y + 22);
@@ -2083,19 +2173,21 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         text(g, "STRIKES", 20, 125, fXs, Color.WHITE, false);
         for (int i = 0; i < MAX_STRIKES; i++) { g.setColor(i < strikes ? new Color(240, 70, 70) : new Color(90, 95, 120)); g.fillOval(92 + i * 20, 113, 14, 14); }
 
-        // ---------- bottom-right card: time, night, phase, traffic ----------
+        // favors banked for the manager
+        g.setColor(new Color(20, 22, 45, 225)); g.fillRoundRect(896, 6, 146, 32, 16, 16);
+        text(g, "FAVORS", 910, 27, fXs, Color.WHITE, false);
+        for (int i = 0; i < MAX_FAVORS; i++) { g.setColor(i < favors ? new Color(255, 215, 80) : new Color(90, 95, 120)); g.fillOval(978 + i * 20, 15, 14, 14); }
+
+        // ---------- bottom-right card: time, night, phase ----------
         int mins = (int) (prog() * 480);
         int hh = (22 + mins / 60) % 24, mm = mins % 60;
         String ck = String.format("%d:%02d %s", hh % 12 == 0 ? 12 : hh % 12, mm, hh >= 12 ? "PM" : "AM");
-        double rk = effRush();
-        String rl = rk < 0.2 ? "quiet" : rk < 0.5 ? "busy" : rk < 0.8 ? "rush" : "mob scene";
-        double cx0 = W - 276, cy0 = H - 34 - 98;
-        g.setColor(new Color(20, 22, 45, 225)); g.fillRoundRect((int) cx0, (int) cy0, 266, 98, 18, 18);
-        g.setColor(OUT); g.setStroke(new BasicStroke(3)); g.drawRoundRect((int) cx0, (int) cy0, 266, 98, 18, 18);
+        double cx0 = W - 276, cy0 = H - 34 - 68;
+        g.setColor(new Color(20, 22, 45, 225)); g.fillRoundRect((int) cx0, (int) cy0, 266, 68, 18, 18);
+        g.setColor(OUT); g.setStroke(new BasicStroke(3)); g.drawRoundRect((int) cx0, (int) cy0, 266, 68, 18, 18);
         text(g, ck, cx0 + 14, cy0 + 34, new Font("Arial Rounded MT Bold", Font.BOLD, 30), Color.WHITE, false);
         text(g, "NIGHT " + night, cx0 + 252 - g.getFontMetrics(fSm).stringWidth("NIGHT " + night), cy0 + 30, fSm, new Color(255, 225, 60), false);
         text(g, phaseName, cx0 + 14, cy0 + 56, fSm, new Color(200, 210, 230), false);
-        meter(g, cx0 + 10, cy0 + 64, 246, 24, rk, rk < 0.35 ? new Color(110, 200, 240) : rk < 0.7 ? new Color(250, 190, 50) : new Color(240, 90, 70), "TRAFFIC  " + rl);
 
         // ---------- top right: tips + combo ----------
         g.setColor(new Color(20, 22, 45, 225)); g.fillRoundRect(1050, 6, 216, 32, 16, 16);
@@ -2257,7 +2349,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         g.setColor(new Color(0, 0, 0, 170)); g.fillRect(0, 0, W, H);
         blockHdr(g, W / 2.0 - 280, 30, 560, 660, new Color(50, 60, 95), 28, 120);
         text(g, win ? "SHIFT OVER! 6:00 AM" : runOver ? "YOU'RE FIRED. FOR GOOD." : "YOU'RE FIRED", W / 2.0, 92, fBig, win ? new Color(120, 240, 150) : new Color(255, 100, 100), true);
-        text(g, win ? "You survived night " + night + ". The next one will be harder." : runOver ? "Strike " + strikes + " of " + MAX_STRIKES + ". The manager has had ENOUGH." : "The store fell apart. Manager is NOT happy.  Strike " + strikes + " of " + MAX_STRIKES + ".", W / 2.0, 128, fSm, Color.WHITE, true);
+        text(g, win ? "You survived night " + night + ". The next one will be harder.   Favors +" + favorsEarned + " (" + favors + "/" + MAX_FAVORS + ")" : runOver ? "Strike " + strikes + " of " + MAX_STRIKES + ". The manager has had ENOUGH." : "The store fell apart. Manager is NOT happy.  Strike " + strikes + " of " + MAX_STRIKES + ".", W / 2.0, 128, fSm, Color.WHITE, true);
         String[] rows = {"Sales: $" + sales, "Tips earned: $" + tips, "Happy customers: " + happy, "Angry walkouts: " + angryCt,
                 "Best combo: x" + bestCombo, "Customers served: " + served, "Robbed: " + robberies + "x  ($" + robbedTotal + " lost)"};
         for (int i = 0; i < rows.length; i++) text(g, rows[i], W / 2.0, 172 + i * 24, fSm, i == 0 ? new Color(120, 240, 150) : Color.WHITE, true);
