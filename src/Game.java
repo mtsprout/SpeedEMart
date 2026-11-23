@@ -49,7 +49,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     };
 
     enum Scene { TITLE, PLAY, OVER, WIN }
-    static final int T_NORMAL = 0, T_BIG = 1, T_CIG = 2, T_SCRATCH = 3, T_ASK = 4, T_BEER = 5, T_ROB = 6;
+    static final int GEN_PCT = 15;   // % chance that a spare change guy is followed by a generous guy
+    static final double COINS_SECS_PER_DOLLAR = 1.1;   // how long the spare change guy takes to count each dollar of pennies
+    static final double COINS_HELP = 1.5;              // extra counting speed while you hold E at the register to help
+    static final int LOW_CIG_PCT = 50;   // % of cigarette customers who want a pack from behind the counter (no climb)
+    static final int T_NORMAL = 0, T_BIG = 1, T_CIG = 2, T_SCRATCH = 3, T_ASK = 4, T_BEER = 5, T_ROB = 6, T_COINS = 8, T_GEN = 9;
     static final int N_RING = 0, N_PACK = 1, N_CARD = 2, N_PAY = 3, N_SCRATCH = 4, N_ASK = 5, N_ID = 6;
     static final int S_SHOP = 0, S_BROWSE = 1, S_QUEUE = 2, S_LEAVE = 3, S_ASKGO = 4, S_ASK = 5, S_ROBGO = 6, S_ROBTAKE = 7;
     static final int C_NONE = 0, C_BOX = 2, C_PACK = 3, C_GROUNDS = 4;
@@ -72,7 +76,10 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     // ---------- classes ----------
     static class Spill { double x, y, hp = 100; }
     static class Shelf {
-        Rectangle2D.Double r; String name; int stock = 8; double face = 100; boolean faced = true;
+        Rectangle2D.Double r; String name; int stock = 8; double[] stockPr = new double[1];
+        /** Restocking also fronts the shelf, so a nearly empty one takes longer to fill. */
+        double stockTime() { return 0.4 + 0.2 * (10 - stock); }
+        double stockHeal() { return 3 + 0.2 * (10 - stock); }
         Shelf(double x, double y, double w, String n) { r = new Rectangle2D.Double(x, y, w, 34); name = n; }
         double standX() { return r.getCenterX(); }
         double standY() { return r.getMaxY() + 26; }
@@ -85,8 +92,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     class Customer {
         int type, state, need, total, bill, rounds, round, tickets, shelf;
         String name, say = "", q = "", wants = ""; double idDur = 1.0; double sayT;
-        Color shirt, skin; double x, y, dir = 1, pat = 1, patMax = 40, browse, scratchT, bob;
-        double calm; int shouts; boolean sodaUser, sodaHappy, paused, seen, card, atSlot, yelled, flip, flipped, answered, angry, gone;
+        Color shirt, skin; double x, y, dir = 1, pat = 1, patMax = 40, browse, scratchT, countMax, bob;
+        double calm; int shouts; boolean sodaUser, sodaHappy, paused, seen, card, atSlot, yelled, flip, flipped, low, answered, covered, angry, gone;
         double[] pr = new double[1];
         List<double[]> path = new ArrayList<>();
     }
@@ -97,7 +104,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     boolean up, down, left, right, sprint, eDown, ePressed, qPressed;
     int mouseX, mouseY;
     double px, py, stun, shake, toastT, t, spawnT, spillT, healthShown;
-    double rage = 0, snapT = 0, trickleT = 10, burstT = 0; int burstLeft = 0, burstForce = -1, nSpawned = 0, phaseIdx = -1; boolean snapWarned;
+    double rage = 0, snapT = 0, trickleT = 10, burstT = 0; int burstLeft = 0, burstForce = -1, nSpawned = 0, phaseIdx = -1; boolean snapWarned, genNext;
     boolean[] evFired = new boolean[EVENTS.length], evWarned = new boolean[EVENTS.length];
     String phaseName = "";
     static final double AWAY_DRAIN = 1.5;   // extra rage drained per second while you are away from the register
@@ -179,6 +186,12 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     int vapeUses; double vapeCd, buzzT; double[] vapePr = new double[1];
     static class Puff { double x, y, vx, vy, life, max, r; }
     List<Puff> puffs = new ArrayList<>();
+    // roller dog along the left wall: a rationed health restorer
+    static final int ROLLER_MAX = 2;
+    static final double ROLLER_CD = 60, ROLLER_HEAL = 15, LINE_HEAL = 8;   // uses per shift, cooldown (s), health (before night scaling), line-cleared bonus
+    static final int LINE_MIN = 3;                                          // line size that counts for the bonus
+    final Point2D.Double rollerP = new Point2D.Double(90, 335);
+    int rollerUses, lineBest, lastAngry; double rollerCd; double[] rollerPr = new double[1]; boolean lineClean = true;
     // coffee pot (from night 5): at 4:30 AM the morning crew wants a FRESH pot by 5:30. Dump the old one, fetch grounds from the back room, brew.
     // Not a hard fail: a pot on time pays a bonus and calms the morning crowd; no pot makes them grumpier.
     static final int COFFEE_NIGHT = 5, COFFEE_START = 390, COFFEE_DEADLINE = 450;   // night it begins; game-minutes after 10 PM (390 = 4:30 AM, 450 = 5:30 AM)
@@ -280,14 +293,14 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         safe = new int[]{80, 40, 25, 12}; Arrays.fill(big, 0); safeBig = 0; clearGiven();
         soda = 20; rugDirt = 10;
         customers.clear(); queue.clear(); spills.clear(); fts.clear();
-        for (Shelf s : shelves) { s.stock = 6 + rnd.nextInt(4); s.face = 80 + rnd.nextInt(20); }
+        for (Shelf s : shelves) { s.stock = 6 + rnd.nextInt(4); s.stockPr[0] = 0; }
         spawnT = 6; spillT = 40; toast = ""; drawerWarned = false; rush = Math.min(0.5, 0.06 * (night - 1)); help = false;
         robT = 0; robCd = 40; robbedTotal = 0; robberies = 0;
         walls.remove(coffeeR); if (coffeeNight()) walls.add(coffeeR);
         coffeeStage = coffeeNight() ? CF_STALE : 0; brewT = 0; coffeeOnTime = coffeeAnnounced = coffeeWarned = coffeeVerdict = false; dumpPr[0] = brewPr[0] = 0;
-        cwConfirm = false; safeDone = false; vapeUses = 0; vapeCd = 0; buzzT = 0; vapePr[0] = 0; puffs.clear(); snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
+        cwConfirm = false; safeDone = false; rollerUses = 0; rollerCd = 0; rollerPr[0] = 0; lineBest = 0; lineClean = true; lastAngry = 0; vapeUses = 0; vapeCd = 0; buzzT = 0; vapePr[0] = 0; puffs.clear(); snaps = 0; cwUsed = cwOn = cwLeaving = false; cwMoving = cwWorking = false; cwStockT = 0;
         sodaLeakT = 12; sodaLeakWarned = false; cineOn = false; beatT = 0; beatTarget = null; hitFlash = 0; packEarly = false;
-        rage = 0; snapT = 0; snapWarned = false; trickleT = 22; burstLeft = 0; burstForce = -1; burstT = 0; nSpawned = 0; phaseIdx = -1; phaseName = "";
+        rage = 0; snapT = 0; snapWarned = false; trickleT = 22; burstLeft = 0; burstForce = -1; burstT = 0; nSpawned = 0; genNext = false; phaseIdx = -1; phaseName = "";
         Arrays.fill(evFired, false); Arrays.fill(evWarned, false);
         toast(night > 1 ? "NIGHT " + night + ": customers are meaner, busier and less patient." : "Press H any time for help.  M mutes sound.");
         Snd.play("bell");
@@ -322,7 +335,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         beatLogic(rdt);
         handleTasks(dt);
         coworkerLogic(dt);
-        vapeLogic(dt);
+        vapeLogic(dt); rollerLogic(dt);
         coffeeLogic(dt);
         reassureCd -= dt;
         if (fPressed) reassure();
@@ -477,14 +490,21 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 L.add(holdDur("id", "Check their ID", 8, REG_X, REG_Y, c0.idDur, c0.pr,
                         () -> { c0.need = N_RING; say(c0, "There. Happy?", 2.5); }, 0.5));
             else if (c0.need == N_RING)
-                L.add(holdDur("ring", c0.type == T_CIG ? "Ring up the cigarettes (slow...)" : "Ring up order", 8, REG_X, REG_Y, c0.type == T_CIG ? 1.6 : 0.55, c0.pr, () -> ringDone(c0), 0.5));
+                L.add(holdDur("ring", c0.type == T_CIG && !c0.low ? "Ring up the cigarettes (slow...)" : "Ring up order", 8, REG_X, REG_Y, c0.type == T_CIG && !c0.low ? 1.6 : 0.55, c0.pr, () -> ringDone(c0), 0.5));
+            else if (c0.need == N_SCRATCH && c0.type == T_COINS) {
+                Task k = new Task();
+                k.id = "count"; k.label = "Help count the pennies (faster)"; k.prio = 8; k.hold = true; k.x = REG_X; k.y = REG_Y;
+                k.work = dt -> { c0.scratchT -= dt * COINS_HELP; if (rnd.nextDouble() < dt * 0.5) heal(0.2); };
+                k.ui = () -> c0.countMax > 0 ? 1 - Math.max(0, c0.scratchT) / c0.countMax : 0;
+                L.add(k);
+            }
             else if (c0.need == N_PACK && carry == C_PACK)
                 L.add(tap("hand", packEarly ? "Hand over the pack (it's ready!)" : "Hand over the pack", 8, REG_X, REG_Y, () -> {
                     carry = C_NONE; c0.need = N_RING;
                     if (packEarly) {   // proactive catch bonus
                         packEarly = false;
                         if (c0.flip && rnd.nextInt(100) < 67) c0.flip = false;   // being proactive: ~45% wrong-pack odds drop to ~15%
-                        tips += 5; health = Math.min(100, health + 3); calmRage(8); bumpRush(0.03);
+                        tips += 5; heal(3); calmRage(8); bumpRush(0.03);
                         c0.pat = Math.min(1, c0.pat + 0.25);
                         say(c0, new String[]{"Wow, you already had it!", "Oh nice, that was fast.", "You read my mind!"}[rnd.nextInt(3)], 3);
                         ft(px, py - 90, "PROACTIVE!  +$5", new Color(255, 225, 60));
@@ -514,7 +534,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             if (dist(px, py, coffeeP.x, coffeeP.y) < 60) {
                 if (coffeeStage == CF_STALE)
                     L.add(holdDur("cdump", "DUMP the old coffee", 7, coffeeP.x, coffeeP.y, 1.5, dumpPr, () -> {
-                        coffeeStage = CF_EMPTY; health = Math.min(100, health + 2); toast("Old pot dumped. Now fetch coffee grounds from the back room."); Snd.play("clink"); }, 0.5));
+                        coffeeStage = CF_EMPTY; heal(2); toast("Old pot dumped. Now fetch coffee grounds from the back room."); Snd.play("clink"); }, 0.5));
                 else if (carry == C_GROUNDS)
                     L.add(holdDur("cbrew", "BREW a fresh pot", 7, coffeeP.x, coffeeP.y, 1.5, brewPr, () -> {
                         coffeeStage = CF_BREW; brewT = 0; carry = C_NONE; toast("Brewing! It needs " + (int) BREW_TIME + " minutes."); Snd.play("bell"); }, 0.5));
@@ -529,6 +549,12 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             else if (vapeCd > 0) L.add(tap("vapewait", "Vape: give it " + (int) Math.ceil(vapeCd) + "s", 8, vapeP.x, vapeP.y, () -> toast("Easy there. Wait " + (int) Math.ceil(vapeCd) + "s for another hit.")));
             else L.add(holdDur("vape", "VAPE BREAK (" + (VAPE_MAX - vapeUses) + " left): rage -" + (int) VAPE_CALM, 7, vapeP.x, vapeP.y, 1.5, vapePr, this::vapeHit, 0.5));
         }
+        // --- roller dog (left wall)
+        if (dist(px, py, rollerP.x, rollerP.y) < 45) {
+            if (rollerUses >= ROLLER_MAX) L.add(tap("rollerno", "The roller is empty. Nothing left but the sad ones.", 8, rollerP.x, rollerP.y, () -> toast("No hot dogs left this shift.")));
+            else if (rollerCd > 0) L.add(tap("rollerwait", "Roller dog: give it " + (int) Math.ceil(rollerCd) + "s", 8, rollerP.x, rollerP.y, () -> toast("You just ate. Wait " + (int) Math.ceil(rollerCd) + "s.")));
+            else L.add(holdDur("roller", "ROLLER DOG (" + (ROLLER_MAX - rollerUses) + " left): health +" + (int) Math.round(ROLLER_HEAL * healMult()), 7, rollerP.x, rollerP.y, 2.0, rollerPr, this::rollerHit, 0.5));
+        }
         // --- boxes / stocking
         if (carry == C_NONE && dist(px, py, boxPile.x, boxPile.y) < 70)
             L.add(tap("box", "Grab a case of stock", 6, boxPile.x, boxPile.y, () -> carry = C_BOX));
@@ -536,19 +562,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             double d = rectDist(s.r, px, py);
             if (d < 48) {
                 if (carry == C_BOX && s.stock < 10)
-                    L.add(tap("stock" + s.name, "Stock " + s.name, 5, s.standX(), s.r.getCenterY(), () -> {
-                        s.stock = 10; carry = C_NONE; calmRage(5); health = Math.min(100, health + 4); ft(px, py - 60, "+4 health", Color.GREEN); }));
-                if (s.face < 92) {
-                    Task k = new Task();
-                    k.id = "face" + s.name; k.label = "Front-face " + s.name; k.prio = 2; k.hold = true;
-                    k.x = s.standX(); k.y = s.r.getCenterY();
-                    k.work = dt -> {
-                        double add = dt * 32; s.face = Math.min(100, s.face + add); health = Math.min(100, health + add * 0.03);
-                        if (s.face >= 100 && !s.faced) { s.faced = true; ft(px, py - 60, "tidy! +2", Color.GREEN); health = Math.min(100, health + 2); }
-                    };
-                    k.ui = () -> s.face / 100;
-                    L.add(k);
-                }
+                    L.add(holdDur("stock" + s.name, "Stock " + s.name + (s.stock <= 2 ? " (it's empty: takes a while)" : ""), 5, s.standX(), s.r.getCenterY(), s.stockTime(), s.stockPr, () -> {
+                        double amt = s.stockHeal(); s.stock = 10; carry = C_NONE; calmRage(5); heal(amt); ft(px, py - 60, "+" + Math.round(amt * healMult()) + " health", Color.GREEN); }, 0.5));
             }
         }
         // --- mop spills
@@ -556,7 +571,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             if (dist(px, py, sp.x, sp.y) < 55) {
                 Task k = new Task();
                 k.id = "spill" + sp.hashCode(); k.label = "Mop the spill"; k.prio = 4; k.hold = true; k.x = sp.x; k.y = sp.y;
-                k.work = dt -> { sp.hp -= dt * 42; if (sp.hp <= 0) { spills.remove(sp); health = Math.min(100, health + 5); calmRage(6); ft(px, py - 60, "sparkly! +5", Color.GREEN); } };
+                k.work = dt -> { sp.hp -= dt * 42; if (sp.hp <= 0) { spills.remove(sp); heal(5); calmRage(6); ft(px, py - 60, "sparkly! +5", Color.GREEN); } };
                 k.ui = () -> 1 - sp.hp / 100;
                 k.undo = () -> sp.hp = Math.min(100, sp.hp + 25);
                 L.add(k);
@@ -566,7 +581,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (soda > 12 && rectDist(sodaR, px, py) < 55) {
             Task k = new Task();
             k.id = "soda"; k.label = "Clean the soda machine"; k.prio = 3; k.hold = true; k.x = sodaR.getCenterX(); k.y = sodaR.getMaxY();
-            k.work = dt -> { double d = Math.min(soda, dt * 18); soda -= d; health = Math.min(100, health + d * 0.08); };
+            k.work = dt -> { double d = Math.min(soda, dt * 18); soda -= d; heal(d * 0.08); };
             k.ui = () -> 1 - soda / 100;
             k.undo = () -> soda = Math.min(100, soda + 8);
             L.add(k);
@@ -575,7 +590,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (rugDirt > 12 && rectDist(rugR, px, py) < 50) {
             Task k = new Task();
             k.id = "rug"; k.label = "Shake out the rug"; k.prio = 3; k.hold = true; k.x = rugR.getCenterX(); k.y = rugR.getCenterY();
-            k.work = dt -> { double d = Math.min(rugDirt, dt * 26); rugDirt -= d; health = Math.min(100, health + d * 0.06); };
+            k.work = dt -> { double d = Math.min(rugDirt, dt * 26); rugDirt -= d; heal(d * 0.06); };
             k.ui = () -> 1 - rugDirt / 100;
             k.undo = () -> rugDirt = Math.min(100, rugDirt + 8);
             L.add(k);
@@ -629,9 +644,36 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         int v = drawerExcess();
         for (int i = 0; i < 4; i++) { int ex = Math.max(0, drawer[i] - FLOAT[i]); drawer[i] -= ex; safe[i] += ex; }
         safeBig += bigPile(); Arrays.fill(big, 0);
-        health = Math.min(100, health + 3 + v / 100.0);
+        heal(3 + v / 100.0);
         toast("Dropped $" + v + " into the safe."); drawerWarned = false; Snd.play("clink");
     }
+    void rollerHit() {
+        rollerUses++; rollerCd = ROLLER_CD;
+        boolean sketchy = rnd.nextDouble() < 0.2;   // some of them have been rolling since Tuesday
+        double before = health; heal(sketchy ? ROLLER_HEAL * 0.5 : ROLLER_HEAL); int gained = (int) Math.round(health - before);
+        if (sketchy) buzzT = 3;
+        ft(px, py - 95, sketchy ? "HEALTH +" + gained + "  ...questionable" : "HEALTH +" + gained + "  mmm", new Color(255, 190, 90));
+        for (Customer c : queue) c.pat = Math.max(0.05, c.pat - 0.03);   // the line saw that too
+        if (!queue.isEmpty()) say(queue.get(0), new String[]{"Are you EATING right now?!", "Is that a hot dog?!", "I'm right here, man."}[rnd.nextInt(3)], 3);
+        Snd.play("clink");
+        toast(sketchy ? "That one was questionable: health +" + gained + ", and you feel a little off. " + (ROLLER_MAX - rollerUses) + " left." : "Roller dog: health +" + gained + ". " + (ROLLER_MAX - rollerUses) + " left.");
+    }
+
+    void rollerLogic(double dt) {
+        rollerCd = Math.max(0, rollerCd - dt);
+        if (angryCt != lastAngry) { lastAngry = angryCt; lineClean = false; }   // a walkout spoils the line
+        lineBest = Math.max(lineBest, queue.size());
+        if (queue.isEmpty() && lineBest > 0) {
+            if (lineBest >= LINE_MIN && lineClean) {
+                double before = health; heal(LINE_HEAL); int gained = (int) Math.round(health - before);
+                ft(px, py - 120, "LINE CLEARED! +" + gained + " health", new Color(120, 235, 140));
+                toast("Line cleared with no walkouts: health +" + gained + ".");
+                Snd.play("bell");
+            }
+            lineBest = 0; lineClean = true;
+        }
+    }
+
     void vapeHit() {
         vapeUses++; vapeCd = VAPE_CD; buzzT = VAPE_BUZZ;
         int before = (int) Math.round(rage); calmRage(VAPE_CALM); int dropped = before - (int) Math.round(rage);
@@ -708,6 +750,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
     }
 
     void ringDone(Customer c) {
+        if (c.gone || c.state == S_LEAVE) return;   // already settled (e.g. someone covered the tab)
         if (c.type == T_CIG && c.flip && !c.flipped) {
             c.flipped = true; c.need = N_PACK; c.pat = Math.max(0.05, c.pat - 0.12); addRage(11, "wrong pack");
             say(c, "NO. Not that one. The OTHER one. Next to it.", 4);
@@ -717,6 +760,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (c.type == T_BIG) addRage(14, "big bill");
         if (c.card) {   // no approval step: note it and move on
             say(c, "Tap tap. Card.", 2); coolLine(c); completePay(c);
+            return;
+        }
+        if (c.type == T_COINS) {   // pays in pennies: no change to make, but he counts every one, right there at the counter
+            sales += c.total; c.need = N_SCRATCH; c.countMax = c.scratchT = COINS_SECS_PER_DOLLAR * c.total;
+            say(c, "Got it right here. All in change. Don't rush me.", 4);
             return;
         }
         c.need = N_PAY;
@@ -772,13 +820,15 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             bumpRush(0.07); Snd.play("kaching"); calmRage(7);
             int tip = (2 + rnd.nextInt(4)) * (1 + combo / 3);
             if (c.type == T_BIG || c.type == T_CIG || c.type == T_SCRATCH) tip *= 2;
+            if (c.type == T_GEN) tip *= 3;    // generous
+            if (c.type == T_COINS) tip = 1;   // tips a single penny, rounded up
             if (c.sodaHappy) tip += 2;   // appreciated the clean soda machine
             tips += tip;
-            health = Math.min(100, health + 3.5 + Math.min(combo, 6) * 0.5);
+            heal(3.5 + Math.min(combo, 6) * 0.5);
             ft(c.x, c.y - 90, "+$" + tip + " TIP!" + (combo >= 3 ? "  x" + combo : ""), new Color(255, 225, 60));
             say(c, new String[]{"Have a good one!", "Thanks, friend!", "Nice! Cheers!", "Wow, fast!"}[rnd.nextInt(4)], 2);
         } else {
-            health = Math.min(100, health + 1); bumpRush(0.01); Snd.play("beep");
+            heal(1); bumpRush(0.01); Snd.play("beep");
             say(c, "Finally...", 2);
             combo = 0;
         }
@@ -834,7 +884,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         // a lull comes with a little mess to deal with
         if (spills.size() < 2) addSpill(300 + rnd.nextInt(800), 340 + rnd.nextInt(290));
         soda = Math.min(100, soda + 6); rugDirt = Math.min(100, rugDirt + 8);
-        Shelf s = shelves.get(rnd.nextInt(shelves.size())); s.face = Math.max(0, s.face - 35); s.faced = false;
+        Shelf s = shelves.get(rnd.nextInt(shelves.size())); s.stock = Math.max(0, s.stock - 3);
     }
 
     // ---------- robbery ----------
@@ -923,10 +973,6 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         else {
             for (Shelf q : shelves) if (q.stock <= 4) { double d = dist(cwX, cwY, q.standX(), q.standY()); if (d < best) { best = d; sh = q; } }
             if (sh != null) { kind = 4; tx = sh.standX(); ty = sh.standY(); }
-            else {
-                for (Shelf q : shelves) if (q.face < 92) { double d = dist(cwX, cwY, q.standX(), q.standY()); if (d < best) { best = d; sh = q; } }
-                if (sh != null) { kind = 5; tx = sh.standX(); ty = sh.standY(); }
-            }
         }
         if (kind == 0) return;   // nothing to do: stands around
         double d = dist(cwX, cwY, tx, ty);
@@ -940,12 +986,11 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         cwWorking = true;
         double w = dt * CW_RATE;
         switch (kind) {
-            case 1: sp.hp -= w * 42; if (sp.hp <= 0) { spills.remove(sp); health = Math.min(100, health + 5); } break;
-            case 2: { double x = Math.min(soda, w * 18); soda -= x; health = Math.min(100, health + x * 0.08); break; }
-            case 3: { double x = Math.min(rugDirt, w * 26); rugDirt -= x; health = Math.min(100, health + x * 0.06); break; }
-            case 4: cwStockT += w; if (cwStockT >= 2.5) { cwStockT = 0; sh.stock = 10; health = Math.min(100, health + 4); } break;
-            case 5: { double add = w * 32; sh.face = Math.min(100, sh.face + add); health = Math.min(100, health + add * 0.03);
-                      if (sh.face >= 100 && !sh.faced) { sh.faced = true; health = Math.min(100, health + 2); } break; }
+            case 1: sp.hp -= w * 42; if (sp.hp <= 0) { spills.remove(sp); heal(5); } break;
+            case 2: { double x = Math.min(soda, w * 18); soda -= x; heal(x * 0.08); break; }
+            case 3: { double x = Math.min(rugDirt, w * 26); rugDirt -= x; heal(x * 0.06); break; }
+            case 4: cwStockT += w; if (cwStockT >= sh.stockTime() * 1.2) { cwStockT = 0; heal(sh.stockHeal()); sh.stock = 10; } break;   // a bit slower than you
+
         }
     }
 
@@ -1090,7 +1135,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         cineCaption = c.type == T_ROB ? "The robber thinks twice." : "You feel better. " + c.name + " does not.";
         if (c.type == T_ROB) {
             c.state = S_LEAVE; c.path.clear(); say(c, "OW! This isn't worth it!", 3);
-            tips += 25; health = Math.min(100, health + 6); robCd = 60;
+            tips += 25; heal(6); robCd = 60;
             toast("You clobbered the ROBBER! He drops the plan (and $25 for your trouble).");
             return;
         }
@@ -1118,13 +1163,16 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         c.skin = SKINS[rnd.nextInt(SKINS.length)];
         c.x = DOOR_X + rnd.nextInt(30) - 15; c.y = DOOR_Y;
         int r = rnd.nextInt(100);
-        c.type = r < 36 ? T_NORMAL : r < 54 ? T_BIG : r < 70 ? T_CIG : r < 82 ? T_SCRATCH : T_ASK;
+        c.type = r < 30 ? T_NORMAL : r < 48 ? T_BIG : r < 64 ? T_CIG : r < 76 ? T_SCRATCH : r < 82 ? T_COINS : T_ASK;
+        if (c.type == T_COINS && night < 2) c.type = T_NORMAL;   // introduced on night 2
         // learning curve: the first few customers are plain, cigarettes come next, the nasty types after you've warmed up
         int gate = nSpawned + (night - 1) * 20;
         if (gate < 5 && c.type > T_BIG) c.type = rnd.nextInt(100) < 25 ? T_BIG : T_NORMAL;
-        else if (gate < 9 && (c.type == T_SCRATCH || c.type == T_ASK)) c.type = T_CIG;
-        else if (effRush() < 0.12 && (c.type == T_SCRATCH || c.type == T_ASK)) c.type = rnd.nextBoolean() ? T_NORMAL : T_BIG;
+        else if (gate < 9 && (c.type == T_SCRATCH || c.type == T_ASK || c.type == T_COINS)) c.type = T_CIG;
+        else if (effRush() < 0.12 && (c.type == T_SCRATCH || c.type == T_ASK || c.type == T_COINS)) c.type = rnd.nextBoolean() ? T_NORMAL : T_BIG;
+        if (genNext && force < 0) { c.type = T_GEN; genNext = false; }   // the customer after a spare change guy may be the generous one
         if (force >= 0) c.type = force;
+        if (c.type == T_COINS && rnd.nextInt(100) < GEN_PCT) genNext = true;
         nSpawned++;
         double hurry = lerp(1.9, 1.0, effRush()) / nm();   // patience: generous early, shrinking as the rush level rises
         switch (c.type) {
@@ -1132,6 +1180,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             case T_BIG: c.patMax = 36 * hurry; break;
             case T_CIG: c.patMax = 50 * hurry; break;
             case T_SCRATCH: c.patMax = 36 * hurry; break;
+            case T_COINS: c.patMax = 38 * hurry; break;
+            case T_GEN: c.patMax = 40 * hurry; break;
             case T_BEER: c.patMax = 40 * hurry; break;
             default: c.patMax = 11;
         }
@@ -1179,12 +1229,18 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 c.total = 1 + rnd.nextInt(4); c.card = false; c.bill = rnd.nextInt(100) < 55 ? 100 : 50; c.need = N_RING;
                 break;
             case T_CIG:
-                c.total = 12 + rnd.nextInt(3); c.card = false; c.bill = 20; c.need = N_PACK; c.flip = rnd.nextInt(100) < 45;
+                c.total = 12 + rnd.nextInt(3); c.card = false; c.bill = 20; c.low = rnd.nextInt(100) < LOW_CIG_PCT; c.need = c.low ? N_RING : N_PACK; c.flip = !c.low && rnd.nextInt(100) < 45;
                 break;
             case T_SCRATCH:
                 if (c.rounds == 0) c.rounds = 2 + rnd.nextInt(2);
                 c.tickets = 2 + rnd.nextInt(4); c.total = c.tickets * 5; c.card = false;
                 c.bill = c.total <= 15 ? 20 : 50; c.need = N_RING;
+                break;
+            case T_GEN:
+                c.total = 18 + rnd.nextInt(15); c.card = true; c.bill = c.total; c.need = N_RING;
+                break;
+            case T_COINS:
+                c.total = 11 + rnd.nextInt(9); c.card = false; c.bill = c.total; c.need = N_RING; c.rounds = 1;
                 break;
             case T_BEER:
                 c.total = 8 + rnd.nextInt(7); c.card = rnd.nextInt(100) < 40; c.bill = 20; c.need = N_ID;
@@ -1194,13 +1250,18 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         switch (c.type) {
             case T_NORMAL: c.wants = "snacks and drinks ($" + c.total + ")"; break;
             case T_BIG: c.wants = "a pack of gum ($" + c.total + ") - paying with a $" + c.bill; break;
-            case T_CIG: c.wants = "a pack of cigarettes from the TOP shelf"; break;
+            case T_CIG: c.wants = c.low ? "a pack of cigarettes from behind the counter" : "a pack of cigarettes from the TOP shelf"; break;
             case T_SCRATCH: c.wants = c.tickets + " scratch-off tickets ($" + c.total + ")"; break;
+            case T_GEN: c.wants = "a big tab ($" + c.total + ") - paying by card"; break;
+            case T_COINS: c.wants = "a pile of snacks ($" + c.total + ") - all in spare change"; break;
             case T_BEER: c.wants = "a 6-pack of beer ($" + c.total + ") - needs an ID check"; break;
         }
         if (c.type == T_BEER) say(c, c.idDur > 2 ? "6-pack of beer. ID? ...it's in here somewhere." : "6-pack of Bland Light. Here's my ID.", 7);
         else if (c.type == T_BIG) say(c, "Can you break a $" + c.bill + "? Just a pack of gum.", 6);
+        else if (c.type == T_CIG && c.low) say(c, new String[]{"Pack of Marbleboro Reds. The ones behind you.", "Just a pack of Newtwarts. Low shelf.", "Caramel Crush, the regular. Right there."}[rnd.nextInt(3)], 6);
         else if (c.type == T_CIG) say(c, new String[]{"Pack of Marbleboro Golds. TOP shelf. Way up there.", "Newtwarts, the ones on the very top.", "Caramel Crush, top row, up there."}[rnd.nextInt(3)], 8);
+        else if (c.type == T_GEN) say(c, new String[]{"Put it all on my card. Keep the change.", "Ring me up. Card. I'm feeling generous.", "Whatever this is, I'm paying."}[rnd.nextInt(3)], 6);
+        else if (c.type == T_COINS) say(c, new String[]{"Gonna need a minute. It's all pennies.", "Got a jar of change. Hope you're not in a hurry.", "I'll just pay in coins. Mostly pennies."}[rnd.nextInt(3)], 7);
         else if (c.type == T_SCRATCH) say(c, c.round == 0 ? "Gimme " + c.tickets + " scratch-offs. The $5 ones." : "Same again! " + c.tickets + " more!", 7);
         else say(c, "Just this, please.", 2.5);
     }
@@ -1247,8 +1308,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                         ft(c.x, c.y - 90, "-4 health (out of stock)", new Color(255, 80, 80));
                         c.state = S_LEAVE; break;
                     }
-                    s.stock--; s.face = Math.max(0, s.face - (12 + rnd.nextInt(25)));
-                    if (s.face < 92) s.faced = false;
+                    s.stock--;
                     rugDirt = Math.min(100, rugDirt + 4);
                     if (rnd.nextInt(100) < 20) addSpill(c.x + rnd.nextInt(20) - 10, c.y + 10);
                     c.state = S_QUEUE; queue.add(c);
@@ -1264,11 +1324,28 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                     c.seen = true;
                     if (c.type == T_BIG) addRage(20, "big bill customer");
                     else if (c.type == T_SCRATCH) addRage(8, "scratcher guy");
+                    else if (c.type == T_COINS) addRage(6, "spare change guy");
                 }
                 c.paused = false;
+                if (c.type == T_GEN && !c.covered && arrived && idx > 0) {   // generous guy, standing behind a spare change guy: puts his tab on the card too
+                    for (int qi = 0; qi < idx; qi++) {
+                        Customer cg = queue.get(qi);
+                        if (cg.type != T_COINS || cg.state != S_QUEUE || (cg.need != N_RING && cg.need != N_SCRATCH)) continue;
+                        c.covered = true;
+                        if (cg.need == N_RING) sales += cg.total;   // not counted yet
+                        say(c, "Put his on my card too. I can't watch this.", 4);
+                        say(cg, "Whoa. Thanks, man!", 3);
+                        finish(cg, 1.0);
+                        ft(px, py - 100, "TAB COVERED!", new Color(255, 225, 60)); toast("A generous customer covered the spare change guy's tab!");
+                        heal(4); calmRage(15); bumpRush(0.05);
+                        break;
+                    }
+                }
                 boolean scratching = c.need == N_SCRATCH;
                 if (scratching) {
                     c.scratchT -= dt;
+                    if (c.type == T_COINS && c.sayT <= 0 && rnd.nextDouble() < dt * 0.35)
+                        say(c, new String[]{"...forty-seven, forty-eight...", "Wait. Where was I?", "...sixty-one... sixty-two...", "Hold on, that one's a button.", "Don't distract me. ...ninety-three..."}[rnd.nextInt(5)], 2.5);
                     if (c.scratchT <= 0) {
                         c.round++;
                         if (c.round >= c.rounds) { finish(c, c.pat); break; }
@@ -1354,12 +1431,16 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (drawerValue() > 350 && !drawerWarned) { drawerWarned = true; toast("Drawer is over $350 -- DROP IT in the safe!"); }
     }
 
+    // Healing scales with the night exactly like the drain does, so recovery keeps pace with difficulty.
+    double healMult() { return night > 1 ? 1 + 0.08 * (night - 1) : 1; }
+    void heal(double amt) { health = Math.min(100, health + amt * healMult()); }
+
     void healthLogic(double dt) {
         double d = 0.09 + 0.08 * prog();
         d += Math.min(4, spills.size()) * 0.045;
         if (soda > 70) d += 0.15;
         if (rugDirt > 70) d += 0.12;
-        for (Shelf s : shelves) { if (s.stock == 0) d += 0.12; if (s.face < 40) d += 0.04; }
+        for (Shelf s : shelves) { if (s.stock == 0) d += 0.12; else if (s.stock <= 3) d += 0.05; }   // a store in disarray wears you down
         if (drawerValue() > 400) d += 0.45;
         if (rage > 70) d += 0.2;
         d *= night > 1 ? 1 + 0.08 * (night - 1) : lerp(0.5, 1.0, t / 180.0);   // night 1: gentle first 3 minutes; later nights drain faster
@@ -1592,8 +1673,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             String[][] colL = {
                 {"CONTROLS", ""},
                 {"W A S D / arrows", "walk  (Shift = sprint)"},
-                {"E  (tap)", "grab a box or sack, stock a shelf, hand over a pack"},
-                {"E  (HOLD)", "chores, ring up, climb for the cigs"},
+                {"E  (tap)", "grab a box or sack, hand over a pack"},
+                {"E  (HOLD)", "chores, stock shelves, ring up, climb for the cigs"},
                 {"Q", "put down whatever you're carrying"},
                 {"F", "\"Be right with you!\" calms the line"},
                 {"", "(15s+ cooldown, weaker each night)"},
@@ -1611,8 +1692,8 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 {"STORE HEALTH", "drains all night. Fill it with chores:"},
                 {"   Mop spills", "stand on the blue puddle, hold E"},
                 {"   Soda machine / rug", "hold E when dirty (dirty soda leaks!)"},
-                {"   Stock shelves", "box from the BACK ROOM, tap E at a shelf"},
-                {"   Front-face", "hold E at a messy shelf"},
+                {"   Stock shelves", "box from the BACK ROOM, hold E at a shelf"},
+                {"", "empty shelves take longer and wear you down"},
                 {"THE SAFE", "in the back room:"},
                 {"   DROP CASH", "move extra/big bills in (over $350 = bad)"},
                 {"   BUY CASH", "restock small bills when the drawer runs low"},
@@ -1626,17 +1707,19 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             drawHelpCol(g, colR, 670, 140, 190, 30);
         } else {
             double y = 112;
-            blockHdr(g, 60, y, 1160, 226, new Color(50, 60, 95), 20, 48);   // fixed-height header band, so it can't reach the text below
+            blockHdr(g, 60, y, 1160, 250, new Color(50, 60, 95), 20, 48);   // fixed-height header band, so it can't reach the text below
             text(g, "CUSTOMER FIELD GUIDE", 90, y + 34, fMid, gold, false);
             String[] f = {
                 "Top hat (big bills):  pays with $50/$100. Make exact change. Out of small bills? Run to the safe and BUY CASH.",
-                "Red cap (cigarettes):  wants the TOP shelf. Stand at the dashed ring under the cig wall and HOLD E to climb.",
-                "      Climb as soon as they walk in for a BONUS (+$5, health). Sometimes they want the OTHER one. Yes, again.",
+                "Red cap (cigarettes):  half want the TOP shelf: stand at the dashed ring under the cig wall and HOLD E to climb.",
+                "      Climb as soon as they walk in for a BONUS (+$5, health). Sometimes they want the OTHER one. Others just want a low pack.",
                 "Green visor (scratchers):  ring them up, then they scratch at the counter and block the line. Then buy more.",
+                "Bucket hat (spare change, night 2+):  pays in pennies and counts every one at the counter. Hold E there to help count.",
+                "Green top hat (generous):  sometimes follows a spare change guy. Pays by card, tips big, and may cover the pennies tab.",
                 "Blue cap (beer):  needs an ID check first (HOLD E), then ring up. Some dig for their ID forever.",
                 "Hard hat (asker):  follows you and asks questions. Hold E on them to answer. They interrupt your chores!",
                 "Anyone yelling at the counter will also interrupt you. Interrupts cancel your chore progress, so finish fast."};
-            for (int i = 0; i < f.length; i++) text(g, f[i], 90, y + 66 + i * 24, fSm, Color.WHITE, false);
+            for (int i = 0; i < f.length; i++) text(g, f[i], 90, y + 66 + i * 22, fSm, Color.WHITE, false);
             String[][] colL = {
                 {"KEEPING YOUR COOL", ""},
                 {"RAGE-O-METER", "Big bills, interruptions and walkouts raise it."},
@@ -1657,9 +1740,12 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 {"", "Dump the old pot, grab grounds, then brew."},
                 {"", "On time: a bonus and a calmer morning crowd."},
                 {"", "Late or never: a grumpier crowd. Never a firing."},
+                {"ROLLER DOG", "Left wall, below the back room: health +15."},
+                {"", "2 a shift, 60s apart. Rarely a bad one."},
+                {"LINE CLEARED", "Serve a line of 3+ with no walkouts: health +8."},
             };
-            drawHelpCol(g, colL, 70, 382, 170, 26);
-            drawHelpCol(g, colR, 670, 382, 190, 26);
+            drawHelpCol(g, colL, 70, 402, 170, 24);
+            drawHelpCol(g, colR, 670, 402, 190, 24);
         }
         // footer: page dots and how to turn the page
         for (int i = 0; i < HELP_PAGES; i++) { g.setColor(i == helpPage ? gold : new Color(90, 95, 120)); g.fillOval((int) (W / 2.0 - 14 + i * 22), 676, 12, 12); }
@@ -1794,6 +1880,14 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             g.setColor(new Color(235, 220, 190)); g.fillRoundRect((int) groundsP.x - 7, (int) groundsP.y - 5, 14, 12, 4, 4);
             g.setColor(new Color(120, 80, 50)); g.fillOval((int) groundsP.x - 3, (int) groundsP.y - 3, 6, 8);
         }
+        // roller dog
+        { boolean on = rollerCd <= 0 && rollerUses < ROLLER_MAX;
+          block(g, rollerP.x - 26, rollerP.y + 2, 52, 22, new Color(110, 100, 90), 6);
+          g.setColor(on ? new Color(205, 120, 70) : new Color(130, 115, 105));
+          for (int i = 0; i < 3; i++) g.fillRoundRect((int) rollerP.x - 20, (int) rollerP.y - 14 + i * 7, 40, 6, 6, 6);
+          g.setColor(OUT); g.setStroke(new BasicStroke(2));
+          for (int i = 0; i < 3; i++) g.drawRoundRect((int) rollerP.x - 20, (int) rollerP.y - 14 + i * 7, 40, 6, 6, 6);
+          tag(g, "ROLLER", rollerP.x, rollerP.y + 38); }
         // vape spot
         block(g, vapeP.x - 24, vapeP.y + 2, 48, 22, new Color(90, 100, 130), 6);
         g.setColor(vapeCd <= 0 && vapeUses < VAPE_MAX ? new Color(80, 220, 210) : new Color(120, 125, 140));
@@ -1817,7 +1911,7 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             for (int i = 0; i < slots; i++) {
                 if (i >= s.stock * slots / 10.0) continue;
                 Color c = SHIRTS[(i + s.name.length()) % SHIRTS.length];
-                double jitter = (1 - s.face / 100) * ((i * 7) % 9 - 4);
+                double jitter = s.stock <= 3 ? ((i * 7) % 9 - 4) * 0.5 : 0;   // a sparse shelf looks ragged
                 g.setColor(c); g.fill(new RoundRectangle2D.Double(s.r.x + 5 + i * 22 + jitter, s.r.y + 4 + Math.abs(jitter) * 0.6, 17, 20, 4, 4));
                 g.setColor(OUT); g.setStroke(new BasicStroke(1.6f)); g.draw(new RoundRectangle2D.Double(s.r.x + 5 + i * 22 + jitter, s.r.y + 4 + Math.abs(jitter) * 0.6, 17, 20, 4, 4));
             }
@@ -1867,11 +1961,13 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
         if (hat == 4) { g.setColor(new Color(240, 200, 40)); g.fillArc((int) x - 14, hy - 10, 28, 24, 0, 180); g.fillRect((int) x - 16, hy + 1, 32, 4); }
         if (hat == 6) { g.setColor(new Color(60, 110, 220)); g.fillArc((int) x - 14, hy - 8, 28, 22, 0, 180); g.fillRoundRect((int) (x + (dir > 0 ? 6 : -20)), hy + 1, 14, 4, 2, 2); g.setColor(Color.WHITE); g.fillOval((int) x - 3, hy - 3, 6, 6); }
         if (hat == 7) { g.setColor(new Color(255, 214, 160)); g.fillRoundRect((int) x - 9, hy + 7, 18, 9, 4, 4); g.setColor(OUT); g.fillOval((int) (x - 6 + dir * 2), hy + 9, 4, 5); g.fillOval((int) (x + 2 + dir * 2), hy + 9, 4, 5); g.setStroke(new BasicStroke(2.5f)); g.drawLine((int) x - 9, hy + 6, (int) x - 3, hy + 8); g.drawLine((int) x + 9, hy + 6, (int) x + 3, hy + 8); }
+        if (hat == 8) { g.setColor(new Color(200, 170, 110)); g.fillArc((int) x - 13, hy - 8, 26, 20, 0, 180); g.fillRoundRect((int) x - 18, hy + 1, 36, 5, 4, 4); g.setColor(OUT); g.drawRoundRect((int) x - 18, hy + 1, 36, 5, 4, 4); g.setColor(new Color(240, 200, 70)); g.fillOval((int) x - 3, hy - 3, 6, 6); }   // bucket hat with a coin
+        if (hat == 9) { g.setColor(new Color(40, 110, 70)); g.fillRoundRect((int) x - 11, hy - 14, 22, 16, 4, 4); g.fillRoundRect((int) x - 17, hy - 2, 34, 5, 3, 3); g.setColor(new Color(245, 200, 50)); g.fillRect((int) x - 11, hy - 5, 22, 4); g.setColor(OUT); g.drawRoundRect((int) x - 17, hy - 2, 34, 5, 3, 3); }   // green top hat, gold band
         if (hat == 5) { g.setColor(new Color(255, 80, 80)); g.fillRoundRect((int) x - 12, hy - 6, 24, 9, 6, 6); } // staff cap
     }
 
     void drawCustomer(Graphics2D g, Customer c) {
-        int hat = c.type == T_BIG ? 1 : c.type == T_CIG ? 2 : c.type == T_SCRATCH ? 3 : c.type == T_ASK ? 4 : c.type == T_BEER ? 6 : c.type == T_ROB ? 7 : 0;
+        int hat = c.type == T_BIG ? 1 : c.type == T_CIG ? 2 : c.type == T_SCRATCH ? 3 : c.type == T_ASK ? 4 : c.type == T_BEER ? 6 : c.type == T_ROB ? 7 : c.type == T_COINS ? 8 : c.type == T_GEN ? 9 : 0;
         int mood = c.angry || c.pat < 0.35 ? 2 : c.pat < 0.7 ? 0 : 1;
         person(g, c.x, c.y, c.shirt, c.skin, c.bob, mood, hat, c.dir, false);
         tag(g, c.name, c.x, c.y + 22);
@@ -1883,7 +1979,14 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
             g.setColor(c.pat > 0.5 ? new Color(90, 210, 110) : c.pat > 0.25 ? new Color(250, 190, 50) : new Color(240, 70, 70));
             g.fillRoundRect((int) (c.x - w / 2), (int) c.y - 86, (int) (w * Math.max(0, c.pat)), 6, 4, 4);
         }
-        if (c.need == N_SCRATCH && c.state == S_QUEUE) {
+        if (c.need == N_SCRATCH && c.state == S_QUEUE && c.type == T_COINS) {
+            int cents = (int) Math.round(c.total * 100 * (1 - Math.max(0, c.scratchT) / Math.max(1, c.countMax)));
+            text(g, "counting: " + cents + "c / " + c.total * 100 + "c", c.x, c.y + 40, fXs, new Color(240, 200, 70), true);
+            for (int i = 0; i < 4; i++) {   // little stacks of coins on the counter
+                g.setColor(new Color(215, 150, 70)); g.fillOval((int) c.x - 22 + i * 11, (int) (c.y - 22 + Math.sin(t * 10 + i) * 2), 9, 6);
+                g.setColor(OUT); g.drawOval((int) c.x - 22 + i * 11, (int) (c.y - 22 + Math.sin(t * 10 + i) * 2), 9, 6);
+            }
+        } else if (c.need == N_SCRATCH && c.state == S_QUEUE) {
             text(g, "scratch scratch scratch", c.x, c.y - 90, fXs, new Color(60, 190, 100), true);
             g.setColor(new Color(240, 230, 150)); g.fillRoundRect((int) c.x - 10, (int) c.y - 28, 20, 12, 3, 3);
             g.setColor(new Color(130, 130, 130)); g.fillOval((int) (c.x - 6 + Math.sin(t * 25) * 5), (int) c.y - 25, 5, 5);
@@ -2110,18 +2213,23 @@ public class Game extends JPanel implements ActionListener, KeyListener, MouseLi
                 "WASD move   SHIFT sprint   E interact (hold for chores)   Q put things down",
                 "Ring people up, make exact change (keys 1-6 or click), drop cash in the safe.",
                 "Keep STORE HEALTH up: mop spills, shake the rug, clean the soda machine,",
-                "stock shelves (grab a box from the back room) and front-face the shelves.",
+                "stock shelves (grab a box from the back room).",
                 "Make customers happy FAST for tips and combos.",
                 "",
-                "Cigarettes are on the TOP shelf. Yes, you have to climb up for them. Every. Time.",
+                "Half the cigarettes are on the TOP shelf. Yes, you have to climb up for them. The rest are behind the counter.",
                 "Big bills, scratcher marathons, and people who need you RIGHT NOW",
                 "will interrupt whatever you're doing. Survive until 6 AM.",
                 "",
                 "THREE STRIKES: get fired " + MAX_STRIKES + " times in one run and you're out for good."};
-        for (int i = 0; i < l.length; i++) text(g, l[i], W / 2.0, 240 + i * 28, fSm, i == l.length - 1 ? new Color(255, 190, 120) : Color.WHITE, true);
-        if (bestNight > 0) text(g, "BEST EVER: survived night " + bestNight + "   |   score " + bestScore, W / 2.0, 602, fSm, new Color(120, 240, 150), true);
-        if ((int) (System.currentTimeMillis() / 500) % 2 == 0) text(g, "PRESS ENTER TO CLOCK IN", W / 2.0, 640, fMid, new Color(255, 230, 70), true);
-        text(g, "H = full help & controls     M = sound on/off", W / 2.0, 676, fSm, Color.WHITE, true);
+        for (int i = 0; i < l.length; i++) text(g, l[i], W / 2.0, (bestNight > 0 ? 298 : 240) + i * 26, fSm, i == l.length - 1 ? new Color(255, 190, 120) : Color.WHITE, true);
+        if (bestNight > 0) {   // the record gets its own bordered box, right under the title, so it can't be missed
+            double bw = 700, bh = 58, bx = (W - bw) / 2, by = 216;
+            g.setColor(new Color(20, 20, 45, 200)); g.fill(new RoundRectangle2D.Double(bx, by, bw, bh, 20, 20));
+            g.setColor(new Color(120, 240, 150)); g.setStroke(new BasicStroke(4f)); g.draw(new RoundRectangle2D.Double(bx, by, bw, bh, 20, 20));
+            text(g, "BEST EVER:  NIGHT " + bestNight + "   |   SCORE " + bestScore, W / 2.0, by + 39, new Font("Arial Rounded MT Bold", Font.BOLD, 30), new Color(120, 240, 150), true);
+        }
+        if ((int) (System.currentTimeMillis() / 500) % 2 == 0) text(g, "PRESS ENTER TO CLOCK IN", W / 2.0, 650, fMid, new Color(255, 230, 70), true);
+        text(g, "H = full help & controls     M = sound on/off", W / 2.0, 690, fSm, Color.WHITE, true);
     }
 
     /** End-of-shift bonuses: {label, points, earned}. Only paid out when you survive to 6 AM. */

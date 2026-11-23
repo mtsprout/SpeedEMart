@@ -102,6 +102,14 @@ Your strikes show in the top-left of the screen.
 and knock 30 off your rage. You get 3 hits per shift, with a 45 second cooldown, a few
 seconds of buzzed slow-walking, and the line watching you do it.
 
+**Health recovery:** healing scales up with the night, the same way the drain does. Two
+ways to claw back health quickly:
+
+- **Roller dog:** a hot dog roller along the left wall. Hold E for 2 seconds to
+  eat one and get +15 health. You get 2 per shift, 60 seconds apart, and about one in five
+  is questionable (half the health, and you walk slowly for a few seconds).
+- **Line cleared:** serve a line of 3 or more customers with no walkouts and you get +8 health.
+
 **Coffee pot (night 5 and up):** at 4:30 AM the morning crew wants fresh coffee by 5:30. Dump the
 old pot (hold E at the machine, top right), grab the grounds sack from the back room, carry it to
 the machine and brew (30 seconds). A pot ready by 5:30 earns a +200 shift bonus and calms the
